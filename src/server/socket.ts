@@ -1,4 +1,4 @@
-import type { IncomingMessage } from "http";
+import type { IncomingMessage, Server as HttpServer } from "http";
 import { Server as SocketIOServer } from "socket.io";
 
 import { AUTH_COOKIE_NAME, verifyAuthToken } from "@/lib/auth";
@@ -63,7 +63,7 @@ export function getOnlineUsers() {
   }));
 }
 
-export function attachSocketServer(server: Parameters<typeof SocketIOServer>[0]) {
+export function attachSocketServer(server: HttpServer) {
   const io = new SocketIOServer(server, {
     cors: { origin: true, credentials: true }
   });
