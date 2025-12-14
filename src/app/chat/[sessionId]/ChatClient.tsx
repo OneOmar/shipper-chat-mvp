@@ -34,8 +34,8 @@ function MiniAvatar({ sender }: { sender: User }) {
   }
 
   const src = sender.image || "/avatar-placeholder.svg";
-  // eslint-disable-next-line @next/next/no-img-element
   return (
+    // eslint-disable-next-line @next/next/no-img-element
     <img
       src={src}
       alt={sender.name || sender.email}

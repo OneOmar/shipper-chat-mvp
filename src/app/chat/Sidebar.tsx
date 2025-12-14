@@ -9,17 +9,11 @@ import { LogoutButton } from "./LogoutButton";
 type User = { id: string; name: string | null; email: string; image: string | null };
 type OnlineUser = { userId: string; email: string };
 
-function initials(nameOrEmail: string) {
-  const parts = nameOrEmail.trim().split(/\s+/).filter(Boolean);
-  const letters = parts.slice(0, 2).map((p) => p[0]?.toUpperCase()).filter(Boolean);
-  return letters.join("") || nameOrEmail.slice(0, 1).toUpperCase();
-}
-
 function Avatar({ user }: { user: User }) {
   const label = user.name?.trim() || user.email;
   const src = user.image || "/avatar-placeholder.svg";
-  // eslint-disable-next-line @next/next/no-img-element
   return (
+    // eslint-disable-next-line @next/next/no-img-element
     <img
       src={src}
       alt={label}
@@ -38,7 +32,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  const activeUserId = searchParams.get("user") ?? "";
+  const activeUserId = searchParams?.get("user") ?? "";
 
   const [users, setUsers] = useState<User[]>([]);
   const [online, setOnline] = useState<Set<string>>(new Set());
@@ -47,7 +41,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const [pendingUserId, setPendingUserId] = useState<string | null>(null);
   const [socket, setSocket] = useState<Socket | null>(null);
 
-  const isChatRoute = useMemo(() => pathname.startsWith("/chat"), [pathname]);
+  const isChatRoute = useMemo(() => (pathname ?? "").startsWith("/chat"), [pathname]);
 
   useEffect(() => {
     if (!isChatRoute) return;

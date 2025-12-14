@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { cookies } from "next/headers";
 
 import { AUTH_COOKIE_NAME, verifyAuthToken } from "@/lib/auth";
