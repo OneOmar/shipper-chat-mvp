@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useMemo, useState } from "react";
 
 import { Sidebar } from "./Sidebar";
 
@@ -8,6 +8,9 @@ type ChatShellContextValue = {
   openSidebar: () => void;
   closeSidebar: () => void;
   toggleSidebar: () => void;
+  unreadByUserId: Record<string, number>;
+  incrementUnread: (userId: string) => void;
+  clearUnread: (userId: string) => void;
 };
 
 const ChatShellContext = createContext<ChatShellContextValue | null>(null);
@@ -20,14 +23,36 @@ export function useChatShell() {
 
 export function ChatShell({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [unreadByUserId, setUnreadByUserId] = useState<Record<string, number>>({});
+
+  const incrementUnread = useCallback((userId: string) => {
+    if (!userId) return;
+    setUnreadByUserId((prev) => ({
+      ...prev,
+      [userId]: Math.min(99, (prev[userId] ?? 0) + 1)
+    }));
+  }, []);
+
+  const clearUnread = useCallback((userId: string) => {
+    if (!userId) return;
+    setUnreadByUserId((prev) => {
+      if (!prev[userId]) return prev;
+      const next = { ...prev };
+      delete next[userId];
+      return next;
+    });
+  }, []);
 
   const value = useMemo<ChatShellContextValue>(
     () => ({
       openSidebar: () => setMobileOpen(true),
       closeSidebar: () => setMobileOpen(false),
-      toggleSidebar: () => setMobileOpen((v) => !v)
+      toggleSidebar: () => setMobileOpen((v) => !v),
+      unreadByUserId,
+      incrementUnread,
+      clearUnread
     }),
-    []
+    [unreadByUserId, incrementUnread, clearUnread]
   );
 
   return (
