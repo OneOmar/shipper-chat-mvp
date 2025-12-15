@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { useChatShell } from "../ChatShell";
 
@@ -19,6 +19,9 @@ type Message = {
 type AiMessageStartEvent = { tempId: string; sessionId: string; sender: User };
 type AiMessageDeltaEvent = { tempId: string; sessionId: string; delta: string; content: string };
 type AiMessageDoneEvent = { tempId: string; sessionId: string; message: Message };
+
+type TypingEvent = { sessionId: string; userId: string };
+type MessagesReadUpdateEvent = { sessionId: string; readerId: string; messageIds: string[] };
 
 function isAi(sender: User) {
   return sender.name === "AI" || sender.email === "ai@local";
@@ -62,27 +65,135 @@ export function ChatClient({
 }) {
   const { openSidebar } = useChatShell();
   const [socket, setSocket] = useState<Socket | null>(null);
+  const socketRef = useRef<Socket | null>(null);
   const [messages, setMessages] = useState<Message[]>(initialMessages);
+  const messagesRef = useRef<Message[]>(initialMessages);
   const [content, setContent] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [connected, setConnected] = useState(false);
   const [joined, setJoined] = useState(false);
+  const connectedRef = useRef(false);
+  const joinedRef = useRef(false);
   const [reconnectKey, setReconnectKey] = useState(0);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+
+  // Typing indicator (frontend-only, auto-clears)
+  const [typingUserIds, setTypingUserIds] = useState<Set<string>>(new Set());
+  const typingClearTimersRef = useRef<Map<string, number>>(new Map());
+  const isTypingRef = useRef(false);
+  const typingStopTimerRef = useRef<number | null>(null);
+
+  // Read receipts (frontend-only)
+  const [readByOtherIds, setReadByOtherIds] = useState<Set<string>>(new Set());
+  const sentReadIdsRef = useRef<Set<string>>(new Set());
 
   const title = useMemo(() => {
     const other = participants.find((p) => p.id !== meUserId);
     return other?.name || other?.email || "Chat";
   }, [participants, meUserId]);
 
+  const otherUser = useMemo(() => participants.find((p) => p.id !== meUserId) ?? null, [participants, meUserId]);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages.length]);
 
   useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
+    connectedRef.current = connected;
+  }, [connected]);
+
+  useEffect(() => {
+    joinedRef.current = joined;
+  }, [joined]);
+
+  function emitTypingStart() {
+    const s = socketRef.current;
+    if (!s || !connectedRef.current || !joinedRef.current) return;
+    s.emit("typing:start", { sessionId });
+  }
+
+  function emitTypingStop() {
+    const s = socketRef.current;
+    if (!s || !connectedRef.current || !joinedRef.current) return;
+    s.emit("typing:stop", { sessionId });
+  }
+
+  function scheduleTypingStop() {
+    if (typingStopTimerRef.current) window.clearTimeout(typingStopTimerRef.current);
+    typingStopTimerRef.current = window.setTimeout(() => {
+      if (!isTypingRef.current) return;
+      isTypingRef.current = false;
+      emitTypingStop();
+    }, 1200);
+  }
+
+  function notifyTyping() {
+    if (!connected || !joined) return;
+    if (!isTypingRef.current) {
+      isTypingRef.current = true;
+      emitTypingStart();
+    }
+    scheduleTypingStop();
+  }
+
+  const clearRemoteTyping = useCallback((userId: string) => {
+    const t = typingClearTimersRef.current.get(userId);
+    if (t) window.clearTimeout(t);
+    typingClearTimersRef.current.delete(userId);
+    setTypingUserIds((prev) => {
+      if (!prev.has(userId)) return prev;
+      const next = new Set(prev);
+      next.delete(userId);
+      return next;
+    });
+  }, []);
+
+  const setRemoteTyping = useCallback(
+    (userId: string) => {
+      setTypingUserIds((prev) => {
+        if (prev.has(userId)) return prev;
+        const next = new Set(prev);
+        next.add(userId);
+        return next;
+      });
+      const existing = typingClearTimersRef.current.get(userId);
+      if (existing) window.clearTimeout(existing);
+      typingClearTimersRef.current.set(
+        userId,
+        window.setTimeout(() => clearRemoteTyping(userId), 2500)
+      );
+    },
+    [clearRemoteTyping]
+  );
+
+  const emitReadForVisibleChat = useCallback(
+    (nextMessages?: Message[]) => {
+      const s = socketRef.current;
+      if (!s || !connectedRef.current || !joinedRef.current) return;
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+
+      const list = nextMessages ?? messagesRef.current;
+      const unreadIds = list
+        .filter((m) => m.sessionId === sessionId && m.senderId !== meUserId)
+        .map((m) => m.id)
+        .filter((id) => !sentReadIdsRef.current.has(id));
+
+      if (unreadIds.length === 0) return;
+      unreadIds.forEach((id) => sentReadIdsRef.current.add(id));
+      s.emit("messages:read", { sessionId, messageIds: unreadIds });
+    },
+    [sessionId, meUserId]
+  );
+
+  useEffect(() => {
     let s: Socket | null = null;
     let cancelled = false;
+    const typingTimers = typingClearTimersRef.current;
 
     async function connect() {
       setError(null);
@@ -94,6 +205,7 @@ export function ChatClient({
 
       s = io({ path: "/socket.io", withCredentials: true });
       setSocket(s);
+      socketRef.current = s;
 
       s.on("connect_error", () => setError("Realtime connection failed"));
       s.on("connect", () => setConnected(true));
@@ -105,7 +217,9 @@ export function ChatClient({
           if (prev.some((m) => m.id === msg.id)) return prev;
           // If a streaming AI temp message exists, drop it once the final arrives.
           const withoutTempAi = prev.filter((m) => !(m.id.startsWith("temp:") && m.role === "assistant"));
-          return [...withoutTempAi, msg];
+          const next = [...withoutTempAi, msg];
+          queueMicrotask(() => emitReadForVisibleChat(next));
+          return next;
         });
       });
 
@@ -141,19 +255,84 @@ export function ChatClient({
         });
       });
 
+      s.on("typing:start", (evt: TypingEvent) => {
+        if (evt.sessionId !== sessionId) return;
+        if (evt.userId === meUserId) return;
+        setRemoteTyping(evt.userId);
+      });
+
+      s.on("typing:stop", (evt: TypingEvent) => {
+        if (evt.sessionId !== sessionId) return;
+        if (evt.userId === meUserId) return;
+        clearRemoteTyping(evt.userId);
+      });
+
+      s.on("messages:read:update", (evt: MessagesReadUpdateEvent) => {
+        if (evt.sessionId !== sessionId) return;
+        if (evt.readerId === meUserId) return;
+        setReadByOtherIds((prev) => {
+          const next = new Set(prev);
+          for (const id of evt.messageIds) next.add(id);
+          return next;
+        });
+      });
+
       s.emit("join_session", sessionId, (ok: boolean) => {
         setJoined(ok);
         if (!ok) setError("Unable to join session");
+        // Apply read receipts instantly on open: the initial "focus/visible" effect can run
+        // before we join the room, so we explicitly emit once join succeeds.
+        if (ok) queueMicrotask(() => emitReadForVisibleChat());
       });
     }
 
     connect();
     return () => {
       cancelled = true;
+      if (typingStopTimerRef.current) window.clearTimeout(typingStopTimerRef.current);
+      for (const t of typingTimers.values()) window.clearTimeout(t);
+      typingTimers.clear();
+
+      if (isTypingRef.current) {
+        isTypingRef.current = false;
+        try {
+          s?.emit("typing:stop", { sessionId });
+        } catch {
+          // ignore
+        }
+      }
       if (s) s.disconnect();
       setSocket(null);
+      socketRef.current = null;
     };
-  }, [sessionId, reconnectKey]);
+  }, [sessionId, reconnectKey, emitReadForVisibleChat, clearRemoteTyping, setRemoteTyping, meUserId]);
+
+  useEffect(() => {
+    // Reset ephemeral state when switching chats.
+    sentReadIdsRef.current = new Set();
+    setReadByOtherIds(new Set());
+    setTypingUserIds(new Set());
+    isTypingRef.current = false;
+  }, [sessionId]);
+
+  useEffect(() => {
+    function onFocusOrVisible() {
+      emitReadForVisibleChat();
+    }
+    window.addEventListener("focus", onFocusOrVisible);
+    document.addEventListener("visibilitychange", onFocusOrVisible);
+    onFocusOrVisible();
+    return () => {
+      window.removeEventListener("focus", onFocusOrVisible);
+      document.removeEventListener("visibilitychange", onFocusOrVisible);
+    };
+  }, [emitReadForVisibleChat]);
+
+  useEffect(() => {
+    // If we connect + join after mount, emit read immediately (no need to wait for focus/visibility events).
+    if (!connected || !joined) return;
+    emitReadForVisibleChat();
+  }, [connected, joined, emitReadForVisibleChat]);
 
   async function send() {
     const text = content.trim();
@@ -161,6 +340,10 @@ export function ChatClient({
     setError(null);
     setSending(true);
     setContent("");
+    if (isTypingRef.current) {
+      isTypingRef.current = false;
+      emitTypingStop();
+    }
 
     socket.emit(
       "send_message",
@@ -188,6 +371,13 @@ export function ChatClient({
   }
 
   const canType = connected && joined && !sending;
+  const typingLabel = useMemo(() => {
+    const ids = Array.from(typingUserIds.values());
+    if (ids.length === 0) return null;
+    const first = participants.find((p) => p.id === ids[0]);
+    const name = first?.name || first?.email || "User";
+    return `${name} is typing…`;
+  }, [typingUserIds, participants]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -225,6 +415,7 @@ export function ChatClient({
           <div className="space-y-3">
             {messages.map((m) => {
               const mine = m.senderId === meUserId;
+              const showRead = mine && !!otherUser && readByOtherIds.has(m.id);
               return (
                 <div key={m.id} className={mine ? "flex justify-end" : "flex justify-start"}>
                   <div
@@ -243,7 +434,14 @@ export function ChatClient({
                     >
                       <div className="whitespace-pre-wrap break-words">{m.content}</div>
                       <div className={["mt-1 text-[11px]", mine ? "text-zinc-600" : "text-zinc-400"].join(" ")}>
-                        {mine ? "You" : m.sender.name || m.sender.email}
+                        {mine ? (
+                          <span className="inline-flex items-center gap-1">
+                            <span>You</span>
+                            {showRead ? <span aria-label="Read receipt">✓✓</span> : null}
+                          </span>
+                        ) : (
+                          m.sender.name || m.sender.email
+                        )}
                       </div>
                     </div>
                   </div>
@@ -271,10 +469,29 @@ export function ChatClient({
           </div>
         ) : null}
 
+        {typingLabel ? (
+          <div className="mb-2 text-xs text-zinc-500">{typingLabel}</div>
+        ) : (
+          <div className="mb-2 h-[16px]" />
+        )}
+
         <div className="flex items-end gap-3">
           <textarea
             value={content}
-            onChange={(e) => setContent(e.target.value)}
+            onChange={(e) => {
+              const next = e.target.value;
+              setContent(next);
+              if (canType && next.trim().length > 0) notifyTyping();
+              if (canType && next.trim().length === 0 && isTypingRef.current) {
+                isTypingRef.current = false;
+                emitTypingStop();
+              }
+            }}
+            onBlur={() => {
+              if (!isTypingRef.current) return;
+              isTypingRef.current = false;
+              emitTypingStop();
+            }}
             onKeyDown={onComposerKeyDown}
             placeholder="Type a message…"
             rows={2}

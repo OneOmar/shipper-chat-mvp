@@ -5,6 +5,8 @@ import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import { LogoutButton } from "./LogoutButton";
+import { useChatShell } from "./ChatShell";
+import { useUnreadIndicator } from "./useUnreadIndicator";
 
 type User = { id: string; name: string | null; email: string; image: string | null };
 type OnlineUser = { userId: string; email: string };
@@ -31,6 +33,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const { unreadByUserId, incrementUnread, clearUnread } = useChatShell();
 
   const activeUserId = searchParams?.get("user") ?? "";
 
@@ -42,6 +45,13 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const [socket, setSocket] = useState<Socket | null>(null);
 
   const isChatRoute = useMemo(() => (pathname ?? "").startsWith("/chat"), [pathname]);
+
+  const { registerChatSession } = useUnreadIndicator({
+    socket,
+    activeUserId,
+    incrementUnread,
+    clearUnread
+  });
 
   useEffect(() => {
     if (!isChatRoute) return;
@@ -135,6 +145,8 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       const data = (await res.json().catch(() => null)) as { sessionId?: string; error?: string } | null;
       if (!res.ok || !data?.sessionId) return;
 
+      registerChatSession(userId, data.sessionId);
+      clearUnread(userId);
       router.push(`/chat/${data.sessionId}?user=${encodeURIComponent(userId)}`);
       onNavigate?.();
     } finally {
@@ -220,6 +232,8 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
             {users.map((u) => {
               const isOnline = online.has(u.id);
               const isActive = activeUserId === u.id;
+              const unread = unreadByUserId[u.id] ?? 0;
+              const showUnread = !isActive && unread > 0;
               return (
                 <li key={u.id}>
                   <button
@@ -228,9 +242,11 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                     disabled={pendingUserId !== null}
                     className={[
                       "flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left",
-                      isActive ? "bg-zinc-900 text-zinc-100" : "hover:bg-zinc-900/60 text-zinc-200",
-                      "border border-transparent",
-                      isActive ? "border-zinc-700" : ""
+                      isActive
+                        ? "bg-zinc-900 text-zinc-100 border border-zinc-700"
+                        : showUnread
+                          ? "bg-emerald-950/30 text-zinc-100 border border-emerald-900/60 hover:bg-emerald-950/40"
+                          : "hover:bg-zinc-900/60 text-zinc-200 border border-transparent"
                     ].join(" ")}
                   >
                     <div className="relative">
@@ -247,9 +263,19 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                       <div className="truncate text-sm font-medium">{u.name || u.email}</div>
                       <div className="truncate text-xs text-zinc-500">{u.email}</div>
                     </div>
-                    {pendingUserId === u.id ? (
-                      <div className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-500 border-t-transparent" />
-                    ) : null}
+                    <div className="flex items-center gap-2">
+                      {showUnread ? (
+                        <span
+                          className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-emerald-500 px-1.5 text-[11px] font-semibold text-zinc-950"
+                          aria-label={`${unread} unread messages`}
+                        >
+                          {unread > 99 ? "99+" : unread}
+                        </span>
+                      ) : null}
+                      {pendingUserId === u.id ? (
+                        <div className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-500 border-t-transparent" />
+                      ) : null}
+                    </div>
                   </button>
                 </li>
               );

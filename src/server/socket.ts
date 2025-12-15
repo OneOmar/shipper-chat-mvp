@@ -28,6 +28,10 @@ export type AiMessageStartEvent = { tempId: string; sessionId: string; sender: R
 export type AiMessageDeltaEvent = { tempId: string; sessionId: string; delta: string; content: string };
 export type AiMessageDoneEvent = { tempId: string; sessionId: string; message: ReceiveMessageEvent };
 
+export type TypingEvent = { sessionId: string; userId: string };
+export type MessagesReadEvent = { sessionId: string; messageIds: string[] };
+export type MessagesReadUpdateEvent = { sessionId: string; readerId: string; messageIds: string[] };
+
 type OnlineUser = {
   userId: string;
   email: string;
@@ -223,6 +227,99 @@ export function attachSocketServer(server: HttpServer) {
           }
         } catch {
           ack?.({ error: "Failed to send message" });
+        }
+      }
+    );
+
+    socket.on(
+      "typing:start",
+      async (payload: { sessionId: string } | string, ack?: (ok: boolean) => void) => {
+        try {
+          const sessionId = typeof payload === "string" ? payload : (payload?.sessionId ?? "");
+          if (!sessionId || typeof sessionId !== "string") {
+            ack?.(false);
+            return;
+          }
+
+          const participant = await prisma.participant.findUnique({
+            where: { userId_sessionId: { userId: user.userId, sessionId } }
+          });
+          if (!participant) {
+            ack?.(false);
+            return;
+          }
+
+          socket.to(`session:${sessionId}`).emit("typing:start", { sessionId, userId: user.userId } satisfies TypingEvent);
+          ack?.(true);
+        } catch {
+          ack?.(false);
+        }
+      }
+    );
+
+    socket.on(
+      "typing:stop",
+      async (payload: { sessionId: string } | string, ack?: (ok: boolean) => void) => {
+        try {
+          const sessionId = typeof payload === "string" ? payload : (payload?.sessionId ?? "");
+          if (!sessionId || typeof sessionId !== "string") {
+            ack?.(false);
+            return;
+          }
+
+          const participant = await prisma.participant.findUnique({
+            where: { userId_sessionId: { userId: user.userId, sessionId } }
+          });
+          if (!participant) {
+            ack?.(false);
+            return;
+          }
+
+          socket.to(`session:${sessionId}`).emit("typing:stop", { sessionId, userId: user.userId } satisfies TypingEvent);
+          ack?.(true);
+        } catch {
+          ack?.(false);
+        }
+      }
+    );
+
+    socket.on(
+      "messages:read",
+      async (payload: MessagesReadEvent, ack?: (ok: boolean) => void) => {
+        try {
+          const sessionId = typeof payload?.sessionId === "string" ? payload.sessionId : "";
+          const messageIds = Array.isArray(payload?.messageIds) ? payload.messageIds.filter((id) => typeof id === "string") : [];
+          if (!sessionId || messageIds.length === 0) {
+            ack?.(false);
+            return;
+          }
+
+          const participant = await prisma.participant.findUnique({
+            where: { userId_sessionId: { userId: user.userId, sessionId } }
+          });
+          if (!participant) {
+            ack?.(false);
+            return;
+          }
+
+          // Frontend-only read receipts: verify message IDs belong to this session, but do not persist.
+          const existing = await prisma.message.findMany({
+            where: { id: { in: messageIds }, sessionId },
+            select: { id: true }
+          });
+          const validIds = existing.map((m) => m.id);
+          if (validIds.length === 0) {
+            ack?.(false);
+            return;
+          }
+
+          io.to(`session:${sessionId}`).emit(
+            "messages:read:update",
+            { sessionId, readerId: user.userId, messageIds: validIds } satisfies MessagesReadUpdateEvent
+          );
+          ack?.(true);
+        } catch {
+          ack?.(false);
         }
       }
     );
