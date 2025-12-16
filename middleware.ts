@@ -10,7 +10,7 @@ function applyCors(req: NextRequest, res: NextResponse) {
   const origin = req.headers.get("origin");
   // If the request has an Origin header, echo it back so cookies/credentials can be used.
   // Using "*" with credentials is blocked by browsers.
-  res.headers.set("Access-Control-Allow-Origin", origin ?? "*");
+  res.headers.set("Access-Control-Allow-Origin", "*");
   res.headers.set("Access-Control-Allow-Credentials", "true");
   res.headers.set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
   res.headers.set(
