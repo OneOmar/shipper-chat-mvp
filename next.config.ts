@@ -2,6 +2,9 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // Prevent Next from incorrectly inferring the workspace root when multiple lockfiles exist.
+  // This keeps file tracing deterministic and silences the dev warning.
+  outputFileTracingRoot: __dirname,
   // Socket.IO uses `/socket.io/` (trailing slash) for websocket URLs.
   // Next.js can emit 308 trailing-slash redirects which break WS handshakes, so we disable that behavior.
   skipTrailingSlashRedirect: true,

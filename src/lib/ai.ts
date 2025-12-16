@@ -2,11 +2,22 @@ import type { MessageRole } from "@prisma/client";
 
 type ChatMessage = { role: MessageRole; content: string };
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
-const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+/**
+ * NOTE:
+ * Do NOT snapshot env vars at import time.
+ * The standalone socket-server loads dotenv at runtime and may import this module before env is loaded,
+ * which would make AI calls fail even when the env var exists.
+ */
+function getOpenAIKey() {
+  return process.env.OPENAI_API_KEY ?? "";
+}
+
+function getOpenAIModel() {
+  return process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+}
 
 function assertOpenAIKey() {
-  if (!OPENAI_API_KEY) throw new Error("Missing OPENAI_API_KEY");
+  if (!getOpenAIKey()) throw new Error("Missing OPENAI_API_KEY");
 }
 
 export async function getAssistantReplyText(messages: ChatMessage[]): Promise<string> {
@@ -15,11 +26,11 @@ export async function getAssistantReplyText(messages: ChatMessage[]): Promise<st
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
+      Authorization: `Bearer ${getOpenAIKey()}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      model: OPENAI_MODEL,
+      model: getOpenAIModel(),
       messages: [
         { role: "system", content: "You are a helpful assistant." },
         ...messages.map((m) => ({ role: m.role, content: m.content }))
@@ -44,11 +55,11 @@ export async function streamAssistantReply(
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
+      Authorization: `Bearer ${getOpenAIKey()}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      model: OPENAI_MODEL,
+      model: getOpenAIModel(),
       stream: true,
       messages: [
         { role: "system", content: "You are a helpful assistant." },

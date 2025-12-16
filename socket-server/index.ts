@@ -21,13 +21,11 @@ const envFilenames = [
   `.env`
 ];
 
-const loaded: string[] = [];
 for (const root of roots) {
   for (const name of envFilenames) {
     const p = path.resolve(root, name);
     if (!existsSync(p)) continue;
     dotenv.config({ path: p, override: false });
-    loaded.push(p);
   }
 }
 
@@ -133,11 +131,10 @@ export function attachSocketServer(server: HttpServer) {
   // In local dev, the Next.js dev server proxy does not reliably support WebSocket upgrades.
   // To keep the existing frontend client code unchanged, we force Engine.IO to use polling in dev
   // so the client won't attempt the websocket transport.
-  const forcePolling = process.env.NODE_ENV !== "production";
   const isDev = process.env.NODE_ENV !== "production";
 
   const io = new SocketIOServer(server, {
-    ...(forcePolling ? { transports: ["polling"] as const, allowUpgrades: false } : {}),
+    ...(isDev ? { transports: ["polling"] as const, allowUpgrades: false } : {}),
     cors: {
       origin(origin, cb) {
         // In development we may access the Next.js app via a LAN IP (e.g. http://192.168.x.x:3000),
