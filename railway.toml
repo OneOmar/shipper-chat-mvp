@@ -1,0 +1,8 @@
+[build]
+# Monorepo: backend lives in /backend
+rootDirectory = "backend"
+
+[deploy]
+startCommand = "npm start"
+# Apply Prisma migrations before the new deploy goes live.
+preDeployCommand = "npx prisma migrate deploy"
