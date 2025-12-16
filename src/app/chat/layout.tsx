@@ -2,14 +2,14 @@ import type { ReactNode } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
-import { verifyAuthToken } from "@/lib/auth";
+import { getAuthCookieName, verifyAuthToken } from "@/lib/auth";
 import { ChatShell } from "./ChatShell";
 
 export const runtime = "nodejs";
 
 export default async function ChatLayout({ children }: { children: ReactNode }) {
   const cookieStore = await cookies();
-  const token = cookieStore.get(process.env.AUTH_COOKIE_NAME ?? "auth_token")?.value ?? "";
+  const token = cookieStore.get(getAuthCookieName())?.value ?? "";
   const ok = token ? verifyAuthToken(token) : null;
   if (!ok) redirect("/login");
 

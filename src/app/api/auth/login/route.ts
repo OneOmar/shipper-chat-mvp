@@ -2,7 +2,7 @@ import bcrypt from "bcrypt";
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
-import { AUTH_COOKIE_NAME, authCookieOptions, signAuthToken } from "@/lib/auth";
+import { authCookieOptions, getAuthCookieName, signAuthToken } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -61,7 +61,7 @@ export async function POST(req: Request) {
     },
     { status: 200 }
   );
-  res.cookies.set(AUTH_COOKIE_NAME, token, authCookieOptions());
+  res.cookies.set(getAuthCookieName(), token, authCookieOptions());
   return res;
 }
 

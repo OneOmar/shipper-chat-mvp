@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { io, type Socket } from "socket.io-client";
+import type { Socket } from "socket.io-client";
 import { useChatShell } from "../ChatShell";
+import { createClientSocket } from "@/lib/socket-client";
 
 type User = { id: string; name: string | null; email: string; image: string | null };
 
@@ -203,7 +204,7 @@ export function ChatClient({
       await fetch("/api/socket", { credentials: "include" });
       if (cancelled) return;
 
-      s = io({ path: "/socket.io", withCredentials: true });
+      s = createClientSocket();
       setSocket(s);
       socketRef.current = s;
 

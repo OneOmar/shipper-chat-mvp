@@ -1,7 +1,57 @@
+import dotenv from "dotenv";
+import { existsSync } from "node:fs";
+import path from "node:path";
+
+// Load env in a way that works for BOTH:
+// - running from repo root (`npm run dev --prefix socket-server`)
+// - running from inside `socket-server/` (`cd socket-server && npm run dev`)
+//
+// IMPORTANT:
+// Next.js loads .env.local and env-specific files (e.g. .env.development.local).
+// If we only load .env here, JWT_SECRET can differ between Next and this process,
+// causing Socket.IO auth to fail with "UNAUTHORIZED"/"Session ID unknown".
+//
+// We intentionally do not print any secret values.
+const NODE_ENV = process.env.NODE_ENV ?? "development";
+const roots = [process.cwd(), path.resolve(process.cwd(), "..")];
+const envFilenames = [
+  `.env.${NODE_ENV}.local`,
+  `.env.local`,
+  `.env.${NODE_ENV}`,
+  `.env`
+];
+
+const loaded: string[] = [];
+for (const root of roots) {
+  for (const name of envFilenames) {
+    const p = path.resolve(root, name);
+    if (!existsSync(p)) continue;
+    dotenv.config({ path: p, override: false });
+    loaded.push(p);
+  }
+}
+
+import { createServer } from "http";
+import express, { type Request, type Response } from "express";
+
+// Ensure `globalThis.crypto` exists (used by existing chat logic).
+import { webcrypto } from "node:crypto";
+if (!(globalThis as unknown as { crypto?: Crypto }).crypto) {
+  (globalThis as unknown as { crypto: Crypto }).crypto = webcrypto as unknown as Crypto;
+}
+
+/**
+ * NOTE:
+ * - This file intentionally keeps the existing Socket.IO event logic unchanged.
+ * - The only adjustments here are infrastructure-only (bootstrapping + CORS + env wiring).
+ * - No Next.js imports are used.
+ */
+
+// ---- Existing Socket.IO server implementation (copied from `src/server/socket.ts`) ----
 import type { IncomingMessage, Server as HttpServer } from "http";
 import { Server as SocketIOServer } from "socket.io";
 
-import { AUTH_COOKIE_NAME, verifyAuthToken } from "@/lib/auth";
+import { getAuthCookieName, verifyAuthToken } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { getOrCreateAiUser } from "@/lib/ai-user";
 import { streamAssistantReply } from "@/lib/ai";
@@ -56,8 +106,11 @@ function parseCookieHeader(cookieHeader: string | undefined): Record<string, str
 }
 
 function getTokenFromRequest(req: IncomingMessage) {
-  const cookies = parseCookieHeader(req.headers.cookie);
-  return cookies[AUTH_COOKIE_NAME] ?? null;
+  const forwarded = req.headers["x-forwarded-cookie"];
+  const forwardedCookie =
+    typeof forwarded === "string" ? forwarded : Array.isArray(forwarded) ? forwarded.join(";") : undefined;
+  const cookies = parseCookieHeader(req.headers.cookie ?? forwardedCookie);
+  return cookies[getAuthCookieName()] ?? null;
 }
 
 export function getOnlineUsers() {
@@ -67,9 +120,37 @@ export function getOnlineUsers() {
   }));
 }
 
+function parseFrontendUrls(raw: string | undefined): string[] {
+  const defaults = ["http://localhost:3000", "https://shipper-chat-mvp.vercel.app"];
+  const extra =
+    raw?.split(",").map((s) => s.trim()).filter(Boolean) ??
+    [];
+  return Array.from(new Set([...defaults, ...extra]));
+}
+
 export function attachSocketServer(server: HttpServer) {
+  const allowedOrigins = parseFrontendUrls(process.env.FRONTEND_URL);
+  // In local dev, the Next.js dev server proxy does not reliably support WebSocket upgrades.
+  // To keep the existing frontend client code unchanged, we force Engine.IO to use polling in dev
+  // so the client won't attempt the websocket transport.
+  const forcePolling = process.env.NODE_ENV !== "production";
+  const isDev = process.env.NODE_ENV !== "production";
+
   const io = new SocketIOServer(server, {
-    cors: { origin: true, credentials: true }
+    ...(forcePolling ? { transports: ["polling"] as const, allowUpgrades: false } : {}),
+    cors: {
+      origin(origin, cb) {
+        // In development we may access the Next.js app via a LAN IP (e.g. http://192.168.x.x:3000),
+        // which won't match the static localhost default allow-list. To avoid confusing 400s during
+        // the Engine.IO handshake, allow all origins in dev. Production remains allow-listed.
+        if (isDev) return cb(null, true);
+        // Allow non-browser clients (no Origin header).
+        if (!origin) return cb(null, true);
+        if (allowedOrigins.includes(origin)) return cb(null, true);
+        return cb(new Error("CORS_NOT_ALLOWED"), false);
+      },
+      credentials: true
+    }
   });
 
   io.use((socket, next) => {
@@ -352,4 +433,27 @@ export function attachSocketServer(server: HttpServer) {
   return io;
 }
 
+// ---- Minimal standalone server bootstrap ----
+
+const PORT = Number(process.env.PORT ?? 3001);
+
+const app = express();
+app.disable("x-powered-by");
+
+app.get("/healthz", (_req: Request, res: Response) => res.status(200).send("ok"));
+
+// The frontend currently calls `/api/socket` as a "warmup" to ensure the socket server exists.
+// In the standalone server we keep this endpoint, but it does not bootstrap Next.js or any Socket.IO server.
+app.get("/api/socket", (_req: Request, res: Response) => res.status(204).end());
+
+// Used by the Next.js `/api/online-users` route to keep the frontend unchanged.
+app.get("/api/online-users", (_req: Request, res: Response) => res.json({ onlineUsers: getOnlineUsers() }));
+
+const httpServer = createServer(app);
+attachSocketServer(httpServer);
+
+httpServer.listen(PORT, () => {
+  // eslint-disable-next-line no-console
+  console.log(`[socket-server] listening on :${PORT}`);
+});
 

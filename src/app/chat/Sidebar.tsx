@@ -1,12 +1,13 @@
 "use client";
 
-import { io, type Socket } from "socket.io-client";
+import type { Socket } from "socket.io-client";
 import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import { LogoutButton } from "./LogoutButton";
 import { useChatShell } from "./ChatShell";
 import { useUnreadIndicator } from "./useUnreadIndicator";
+import { createClientSocket } from "@/lib/socket-client";
 
 type User = { id: string; name: string | null; email: string; image: string | null };
 type OnlineUser = { userId: string; email: string };
@@ -99,10 +100,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       await fetch("/api/socket", { credentials: "include" });
       if (cancelled) return;
 
-      s = io({
-        path: "/socket.io",
-        withCredentials: true
-      });
+      s = createClientSocket();
 
       s.on("user_online", (evt: { userId: string }) => {
         setOnline((prev) => {

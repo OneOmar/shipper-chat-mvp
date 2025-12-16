@@ -2,7 +2,7 @@ import bcrypt from "bcrypt";
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
-import { AUTH_COOKIE_NAME, authCookieOptions, signAuthToken } from "@/lib/auth";
+import { authCookieOptions, getAuthCookieName, signAuthToken } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -109,7 +109,7 @@ export async function GET(req: Request) {
   const jwt = signAuthToken({ sub: user.id, email: user.email });
 
   const res = NextResponse.redirect(new URL(next, url.origin));
-  res.cookies.set(AUTH_COOKIE_NAME, jwt, authCookieOptions());
+  res.cookies.set(getAuthCookieName(), jwt, authCookieOptions());
   // clear state cookies
   res.cookies.set("google_oauth_state", "", { path: "/", maxAge: 0 });
   res.cookies.set("google_oauth_next", "", { path: "/", maxAge: 0 });
