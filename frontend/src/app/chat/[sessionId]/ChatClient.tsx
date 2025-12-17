@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import type { Socket } from "socket.io-client";
 import { useChatShell } from "../ChatShell";
 import { createClientSocket } from "@/lib/socket-client";
@@ -95,6 +96,7 @@ export function ChatClient({
   }, [participants, meUserId]);
 
   const otherUser = useMemo(() => participants.find((p) => p.id !== meUserId) ?? null, [participants, meUserId]);
+  const canViewProfile = !!otherUser && !isAi(otherUser);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -397,9 +399,19 @@ export function ChatClient({
               <div className="truncate text-sm font-semibold text-zinc-100">{title}</div>
             </div>
           </div>
-          <div className="flex items-center gap-2 text-xs text-zinc-500">
+          <div className="flex items-center gap-3">
+            {canViewProfile ? (
+              <Link
+                href={`/users/${encodeURIComponent(otherUser.id)}`}
+                className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-900"
+              >
+                View profile
+              </Link>
+            ) : null}
+            <div className="flex items-center gap-2 text-xs text-zinc-500">
             <span className={["h-2 w-2 rounded-full", connected ? "bg-emerald-500" : "bg-zinc-600"].join(" ")} />
             <span>{connected ? (joined ? "Connected" : "Joining…") : "Disconnected"}</span>
+            </div>
           </div>
         </div>
       </div>

@@ -703,9 +703,21 @@ app.get("/api/users", requireAuth, asyncHandler(async (req: Request, res: Respon
   const users = await prisma.user.findMany({
     where: { id: { not: me.sub } },
     orderBy: [{ name: "asc" }, { email: "asc" }],
-    select: { id: true, name: true, email: true, image: true }
+    select: { id: true, name: true, email: true, image: true, bio: true }
   });
   return res.json({ users });
+}));
+
+app.get("/api/users/:userId", requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = typeof req.params.userId === "string" ? req.params.userId : "";
+  if (!userId) return res.status(400).json({ error: "Missing userId" });
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, name: true, email: true, image: true, bio: true, createdAt: true }
+  });
+  if (!user) return res.status(404).json({ error: "Not found" });
+  return res.json({ user });
 }));
 
 type SessionBody = { userId?: string };
@@ -755,6 +767,79 @@ app.get("/api/chat/sessions", requireAuth, asyncHandler(async (req: Request, res
     out.push({ sessionId: s.id, userId: other.userId });
   }
   return res.json({ sessions: out });
+}));
+
+// ---- Profile (public fields) ----
+
+app.get("/api/me", requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const me = (req as AuthedRequest).auth;
+
+  const user = await prisma.user.findUnique({
+    where: { id: me.sub },
+    select: { id: true, email: true, name: true, image: true, bio: true, createdAt: true }
+  });
+
+  if (!user) return res.status(404).json({ error: "Not found" });
+  return res.json({ user });
+}));
+
+type UpdateProfileBody = { name?: unknown; image?: unknown; bio?: unknown };
+app.put("/api/me/profile", requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const me = (req as AuthedRequest).auth;
+  const body = (req.body ?? {}) as UpdateProfileBody;
+
+  const nameRaw = body.name;
+  const imageRaw = body.image;
+  const bioRaw = body.bio;
+
+  function normalizeOptionalText(v: unknown, maxLen: number) {
+    if (v === undefined) return { ok: true as const, value: undefined as string | null | undefined };
+    if (v === null) return { ok: true as const, value: null as const };
+    if (typeof v !== "string") return { ok: false as const, error: "Invalid payload" };
+    const trimmed = v.trim();
+    if (!trimmed) return { ok: true as const, value: null as const };
+    if (trimmed.length > maxLen) return { ok: false as const, error: `Must be <= ${maxLen} characters` };
+    return { ok: true as const, value: trimmed };
+  }
+
+  const name = normalizeOptionalText(nameRaw, 50);
+  if (!name.ok) return res.status(400).json({ error: name.error });
+
+  const bio = normalizeOptionalText(bioRaw, 280);
+  if (!bio.ok) return res.status(400).json({ error: bio.error });
+
+  // image: allow http(s) URL only (or null/empty to clear)
+  let image: string | null | undefined = undefined;
+  if (imageRaw !== undefined) {
+    if (imageRaw === null) {
+      image = null;
+    } else if (typeof imageRaw !== "string") {
+      return res.status(400).json({ error: "Invalid payload" });
+    } else {
+      const trimmed = imageRaw.trim();
+      if (!trimmed) {
+        image = null;
+      } else if (!/^https?:\/\//i.test(trimmed)) {
+        return res.status(400).json({ error: "Avatar URL must start with http:// or https://" });
+      } else if (trimmed.length > 2048) {
+        return res.status(400).json({ error: "Avatar URL is too long" });
+      } else {
+        image = trimmed;
+      }
+    }
+  }
+
+  const updated = await prisma.user.update({
+    where: { id: me.sub },
+    data: {
+      ...(name.value !== undefined ? { name: name.value } : {}),
+      ...(bio.value !== undefined ? { bio: bio.value } : {}),
+      ...(image !== undefined ? { image } : {})
+    },
+    select: { id: true, email: true, name: true, image: true, bio: true, createdAt: true }
+  });
+
+  return res.json({ user: updated });
 }));
 
 app.post("/api/chat/ai-session", requireAuth, asyncHandler(async (req: Request, res: Response) => {
@@ -822,6 +907,21 @@ app.use((err: unknown, _req: Request, res: Response, _next: (err?: unknown) => v
   // eslint-disable-next-line no-console
   console.error("[backend] unhandled error", err);
   if (res.headersSent) return;
+
+  const anyErr = err as { statusCode?: unknown; status?: unknown; type?: unknown };
+  const statusCode =
+    typeof anyErr?.statusCode === "number"
+      ? anyErr.statusCode
+      : typeof anyErr?.status === "number"
+        ? anyErr.status
+        : 500;
+
+  // JSON parse errors should be 400, not 500.
+  if (statusCode >= 400 && statusCode < 500) {
+    const isBadJson = anyErr?.type === "entity.parse.failed";
+    return res.status(statusCode).json({ error: isBadJson ? "Invalid JSON" : "Bad Request" });
+  }
+
   res.status(500).json({ error: "Internal Server Error" });
 });
 

@@ -2,6 +2,7 @@
 
 import type { Socket } from "socket.io-client";
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import { LogoutButton } from "./LogoutButton";
@@ -175,7 +176,16 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           <div className="text-sm font-semibold text-zinc-100">Users</div>
           <div className="text-xs text-zinc-500">{socket ? "Live" : "Offline"}</div>
         </div>
-        <LogoutButton />
+        <div className="flex items-center gap-2">
+          <Link
+            href="/profile"
+            onClick={() => onNavigate?.()}
+            className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-900"
+          >
+            Profile
+          </Link>
+          <LogoutButton />
+        </div>
       </div>
 
       <div className="flex-1 overflow-auto p-2">

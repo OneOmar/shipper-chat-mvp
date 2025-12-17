@@ -22,6 +22,7 @@ model User {
   name      String?
   email     String        @unique
   image     String?
+  bio       String?
   password  String
   createdAt DateTime      @default(now())
 
