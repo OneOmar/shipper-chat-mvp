@@ -13,4 +13,7 @@ dist
 # Build / TS artifacts
 *.tsbuildinfo
 
+# Local dev artifacts
+.profile_test_cookies.txt
+
 

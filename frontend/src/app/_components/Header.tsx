@@ -10,12 +10,20 @@ export function Header({ isAuthed }: { isAuthed: boolean }) {
 
         <nav className="flex items-center gap-2">
           {isAuthed ? (
-            <Link
-              href="/chat"
-              className="rounded-lg bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-900 hover:bg-white"
-            >
-              Go to Chat
-            </Link>
+            <>
+              <Link
+                href="/profile"
+                className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-900"
+              >
+                Profile
+              </Link>
+              <Link
+                href="/chat"
+                className="rounded-lg bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-900 hover:bg-white"
+              >
+                Go to Chat
+              </Link>
+            </>
           ) : (
             <>
               <Link

@@ -63,7 +63,17 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/api/:path*", "/chat", "/chat/:path*", "/socket.io", "/socket.io/:path*"]
+  matcher: [
+    "/api/:path*",
+    "/chat",
+    "/chat/:path*",
+    "/profile",
+    "/profile/:path*",
+    "/users",
+    "/users/:path*",
+    "/socket.io",
+    "/socket.io/:path*"
+  ]
 };
 
 
