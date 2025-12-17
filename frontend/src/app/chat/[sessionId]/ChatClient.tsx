@@ -24,6 +24,7 @@ type AiMessageDoneEvent = { tempId: string; sessionId: string; message: Message 
 
 type TypingEvent = { sessionId: string; userId: string };
 type MessagesReadUpdateEvent = { sessionId: string; readerId: string; messageIds: string[] };
+type MessageDeletedEvent = { sessionId: string; messageId: string; deletedBy: string };
 
 function isAi(sender: User) {
   return sender.name === "AI" || sender.email === "ai@local";
@@ -79,12 +80,15 @@ export function ChatClient({
   const joinedRef = useRef(false);
   const [reconnectKey, setReconnectKey] = useState(0);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const [emojiOpen, setEmojiOpen] = useState(false);
 
   // Typing indicator (frontend-only, auto-clears)
   const [typingUserIds, setTypingUserIds] = useState<Set<string>>(new Set());
   const typingClearTimersRef = useRef<Map<string, number>>(new Map());
   const isTypingRef = useRef(false);
   const typingStopTimerRef = useRef<number | null>(null);
+  const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
 
   // Read receipts (frontend-only)
   const [readByOtherIds, setReadByOtherIds] = useState<Set<string>>(new Set());
@@ -193,6 +197,22 @@ export function ChatClient({
     [sessionId, meUserId]
   );
 
+  const handleMessageDeleted = useCallback(
+    (evt: MessageDeletedEvent) => {
+      if (evt.sessionId !== sessionId) return;
+      setMessages((prev) => prev.filter((m) => m.id !== evt.messageId));
+      setSelectedMessageId((prev) => (prev === evt.messageId ? null : prev));
+      setReadByOtherIds((prev) => {
+        if (!prev.has(evt.messageId)) return prev;
+        const next = new Set(prev);
+        next.delete(evt.messageId);
+        return next;
+      });
+      sentReadIdsRef.current.delete(evt.messageId);
+    },
+    [sessionId]
+  );
+
   useEffect(() => {
     let s: Socket | null = null;
     let cancelled = false;
@@ -280,6 +300,8 @@ export function ChatClient({
         });
       });
 
+      s.on("message_deleted", handleMessageDeleted);
+
       s.emit("join_session", sessionId, (ok: boolean) => {
         setJoined(ok);
         if (!ok) setError("Unable to join session");
@@ -308,7 +330,7 @@ export function ChatClient({
       setSocket(null);
       socketRef.current = null;
     };
-  }, [sessionId, reconnectKey, emitReadForVisibleChat, clearRemoteTyping, setRemoteTyping, meUserId]);
+  }, [sessionId, reconnectKey, emitReadForVisibleChat, clearRemoteTyping, setRemoteTyping, meUserId, handleMessageDeleted]);
 
   useEffect(() => {
     // Reset ephemeral state when switching chats.
@@ -317,6 +339,27 @@ export function ChatClient({
     setTypingUserIds(new Set());
     isTypingRef.current = false;
   }, [sessionId]);
+
+  async function deleteMyMessage(messageId: string) {
+    const s = socketRef.current;
+    if (!s || !connectedRef.current || !joinedRef.current) return;
+    setError(null);
+
+    // Optimistic remove.
+    let snapshot: Message[] | null = null;
+    setMessages((prev) => {
+      snapshot = prev;
+      return prev.filter((m) => m.id !== messageId);
+    });
+
+    s.emit("delete_message", { sessionId, messageId }, (resp: { ok: true } | { error: string }) => {
+      if (!resp || ("error" in resp && resp.error)) {
+        // Restore on failure.
+        if (snapshot) setMessages(snapshot);
+        setError("Failed to delete message");
+      }
+    });
+  }
 
   useEffect(() => {
     function onFocusOrVisible() {
@@ -337,12 +380,24 @@ export function ChatClient({
     emitReadForVisibleChat();
   }, [connected, joined, emitReadForVisibleChat]);
 
+  const quickEmojis = useMemo(
+    () => ["👍", "❤️", "😂", "🎉", "🙏", "🔥", "✅", "👀", "🤝", "😄", "😅", "😮"] as const,
+    []
+  );
+
+  function focusComposer() {
+    // Ensure focus after state updates / disabled toggles.
+    window.setTimeout(() => composerRef.current?.focus(), 0);
+  }
+
   async function send() {
     const text = content.trim();
     if (!text || !socket || !connected || !joined) return;
     setError(null);
     setSending(true);
     setContent("");
+    setEmojiOpen(false);
+    focusComposer();
     if (isTypingRef.current) {
       isTypingRef.current = false;
       emitTypingStop();
@@ -356,12 +411,14 @@ export function ChatClient({
         if ("error" in resp) {
           setError(resp.error);
           setContent(text);
+          focusComposer();
           return;
         }
         setMessages((prev) => {
           if (prev.some((m) => m.id === resp.id)) return prev;
           return [...prev, resp];
         });
+        focusComposer();
       }
     );
   }
@@ -416,7 +473,10 @@ export function ChatClient({
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-auto px-6 py-4">
+      <div
+        className="flex min-h-0 flex-1 flex-col overflow-auto px-6 py-4"
+        onClick={() => setSelectedMessageId(null)}
+      >
         {messages.length === 0 ? (
           <div className="flex flex-1 items-center justify-center">
             <div className="max-w-sm rounded-2xl border border-zinc-800 bg-zinc-900/30 px-4 py-3 text-center">
@@ -429,6 +489,8 @@ export function ChatClient({
             {messages.map((m) => {
               const mine = m.senderId === meUserId;
               const showRead = mine && !!otherUser && readByOtherIds.has(m.id);
+              const canDelete = mine && !m.id.startsWith("temp:");
+              const isSelected = selectedMessageId === m.id;
               return (
                 <div key={m.id} className={mine ? "flex justify-end" : "flex justify-start"}>
                   <div
@@ -436,8 +498,14 @@ export function ChatClient({
                   >
                     {mine ? null : <MiniAvatar sender={m.sender} />}
                     <div
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!canDelete) return;
+                        setSelectedMessageId((prev) => (prev === m.id ? null : m.id));
+                      }}
                       className={[
                         "rounded-2xl px-3 py-2 text-sm",
+                        canDelete && isSelected ? "ring-2 ring-zinc-400/40" : "",
                         mine
                           ? "bg-zinc-100 text-zinc-900"
                           : isAi(m.sender)
@@ -446,7 +514,7 @@ export function ChatClient({
                       ].join(" ")}
                     >
                       <div className="whitespace-pre-wrap break-words">{m.content}</div>
-                      <div className={["mt-1 text-[11px]", mine ? "text-zinc-600" : "text-zinc-400"].join(" ")}>
+                      <div className={["mt-1 flex items-center justify-between gap-2 text-[11px]", mine ? "text-zinc-600" : "text-zinc-400"].join(" ")}>
                         {mine ? (
                           <span className="inline-flex items-center gap-1">
                             <span>You</span>
@@ -455,6 +523,24 @@ export function ChatClient({
                         ) : (
                           m.sender.name || m.sender.email
                         )}
+                        {canDelete && isSelected ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (!window.confirm("Delete this message?")) return;
+                              void deleteMyMessage(m.id);
+                              focusComposer();
+                              setSelectedMessageId(null);
+                            }}
+                            className="inline-flex h-6 w-6 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-900/50 hover:text-zinc-200"
+                            aria-label="Delete message"
+                          >
+                            <span aria-hidden="true" className="text-base leading-none">
+                              ×
+                            </span>
+                          </button>
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -489,7 +575,45 @@ export function ChatClient({
         )}
 
         <div className="flex items-end gap-3">
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setEmojiOpen((v) => !v)}
+              disabled={!canType}
+              aria-label="Open emoji picker"
+              aria-expanded={emojiOpen}
+              className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950/60 text-lg text-zinc-200 hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              🙂
+            </button>
+
+            {emojiOpen ? (
+              <div className="absolute bottom-12 left-0 z-10 w-56 rounded-2xl border border-zinc-800 bg-zinc-950 p-2 shadow-lg">
+                <div className="grid grid-cols-6 gap-1">
+                  {quickEmojis.map((emoji) => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      onClick={() => {
+                        setEmojiOpen(false);
+                        if (!canType) return;
+                        setContent((prev) => `${prev}${emoji}`);
+                        focusComposer();
+                      }}
+                      className="inline-flex h-9 w-9 items-center justify-center rounded-xl hover:bg-zinc-900"
+                      aria-label={`Insert ${emoji}`}
+                    >
+                      <span className="text-lg leading-none">{emoji}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-2 text-[11px] text-zinc-500">Click to insert into the message.</div>
+              </div>
+            ) : null}
+          </div>
+
           <textarea
+            ref={composerRef}
             value={content}
             onChange={(e) => {
               const next = e.target.value;
@@ -515,9 +639,26 @@ export function ChatClient({
             type="button"
             onClick={send}
             disabled={!canType || !content.trim()}
-            className="inline-flex h-11 items-center justify-center rounded-xl bg-zinc-100 px-4 text-sm font-medium text-zinc-900 hover:bg-white disabled:cursor-not-allowed disabled:opacity-70"
+            aria-label="Send message"
+            className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-zinc-100 text-zinc-900 hover:bg-white disabled:cursor-not-allowed disabled:opacity-70"
           >
-            {sending ? "Sending…" : "Send"}
+            {sending ? (
+              <span className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-400 border-t-transparent" aria-hidden="true" />
+            ) : (
+              <svg
+                viewBox="0 0 24 24"
+                className="h-5 w-5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M22 2 11 13" />
+                <path d="M22 2 15 22 11 13 2 9 22 2" />
+              </svg>
+            )}
           </button>
         </div>
         <div className="mt-2 text-xs text-zinc-500">
