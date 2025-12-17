@@ -390,6 +390,29 @@ export function ChatClient({
     window.setTimeout(() => composerRef.current?.focus(), 0);
   }
 
+  function insertEmojiAtCursor(emoji: string) {
+    const el = composerRef.current;
+    const currentValue = el?.value ?? content;
+    const start = el?.selectionStart ?? currentValue.length;
+    const end = el?.selectionEnd ?? currentValue.length;
+
+    const next = `${currentValue.slice(0, start)}${emoji}${currentValue.slice(end)}`;
+    const nextCaret = start + emoji.length;
+
+    setContent(next);
+
+    window.setTimeout(() => {
+      const node = composerRef.current;
+      if (!node) return;
+      node.focus();
+      try {
+        node.setSelectionRange(nextCaret, nextCaret);
+      } catch {
+        // ignore
+      }
+    }, 0);
+  }
+
   async function send() {
     const text = content.trim();
     if (!text || !socket || !connected || !joined) return;
@@ -574,7 +597,7 @@ export function ChatClient({
           <div className="mb-2 h-[16px]" />
         )}
 
-        <div className="flex items-end gap-3">
+        <div className="flex items-center gap-3">
           <div className="relative">
             <button
               type="button"
@@ -582,7 +605,7 @@ export function ChatClient({
               disabled={!canType}
               aria-label="Open emoji picker"
               aria-expanded={emojiOpen}
-              className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950/60 text-lg text-zinc-200 hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-70"
+              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950/60 text-lg text-zinc-200 hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-70"
             >
               🙂
             </button>
@@ -597,8 +620,7 @@ export function ChatClient({
                       onClick={() => {
                         setEmojiOpen(false);
                         if (!canType) return;
-                        setContent((prev) => `${prev}${emoji}`);
-                        focusComposer();
+                        insertEmojiAtCursor(emoji);
                       }}
                       className="inline-flex h-9 w-9 items-center justify-center rounded-xl hover:bg-zinc-900"
                       aria-label={`Insert ${emoji}`}
@@ -640,7 +662,7 @@ export function ChatClient({
             onClick={send}
             disabled={!canType || !content.trim()}
             aria-label="Send message"
-            className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-zinc-100 text-zinc-900 hover:bg-white disabled:cursor-not-allowed disabled:opacity-70"
+            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-zinc-900 hover:bg-white disabled:cursor-not-allowed disabled:opacity-70"
           >
             {sending ? (
               <span className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-400 border-t-transparent" aria-hidden="true" />
