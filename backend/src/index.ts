@@ -93,6 +93,7 @@ export type AiMessageDoneEvent = { tempId: string; sessionId: string; message: R
 export type TypingEvent = { sessionId: string; userId: string };
 export type MessagesReadEvent = { sessionId: string; messageIds: string[] };
 export type MessagesReadUpdateEvent = { sessionId: string; readerId: string; messageIds: string[] };
+export type MessageDeletedEvent = { sessionId: string; messageId: string; deletedBy: string };
 
 type OnlineUser = {
   userId: string;
@@ -371,6 +372,57 @@ export function attachSocketServer(server: HttpServer) {
           }
         } catch {
           ack?.({ error: "Failed to send message" });
+        }
+      }
+    );
+
+    socket.on(
+      "delete_message",
+      async (
+        payload: { sessionId: string; messageId: string },
+        ack?: (resp: { ok: true } | { error: string }) => void
+      ) => {
+        try {
+          const sessionId = typeof payload?.sessionId === "string" ? payload.sessionId : "";
+          const messageId = typeof payload?.messageId === "string" ? payload.messageId : "";
+          if (!sessionId || !messageId) {
+            ack?.({ error: "Invalid payload" });
+            return;
+          }
+
+          const participant = await prisma.participant.findUnique({
+            where: { userId_sessionId: { userId: user.userId, sessionId } }
+          });
+          if (!participant) {
+            ack?.({ error: "Unauthorized" });
+            return;
+          }
+
+          const msg = await prisma.message.findUnique({
+            where: { id: messageId },
+            select: { id: true, sessionId: true, senderId: true }
+          });
+
+          // Avoid leaking existence across sessions.
+          if (!msg || msg.sessionId !== sessionId) {
+            ack?.({ error: "Not found" });
+            return;
+          }
+
+          if (msg.senderId !== user.userId) {
+            ack?.({ error: "Forbidden" });
+            return;
+          }
+
+          await prisma.message.delete({ where: { id: messageId } });
+
+          io.to(`session:${sessionId}`).emit(
+            "message_deleted",
+            { sessionId, messageId, deletedBy: user.userId } satisfies MessageDeletedEvent
+          );
+          ack?.({ ok: true });
+        } catch {
+          ack?.({ error: "Failed to delete message" });
         }
       }
     );
