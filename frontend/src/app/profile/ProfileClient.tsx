@@ -37,21 +37,16 @@ export function ProfileClient() {
   const [notice, setNotice] = useState<string | null>(null);
 
   const [name, setName] = useState("");
-  const [image, setImage] = useState("");
   const [bio, setBio] = useState("");
 
-  const normalizedImageForPreview = useMemo(() => {
-    const v = image.trim();
-    return v ? v : null;
-  }, [image]);
+  const imageForPreview = useMemo(() => me?.image ?? null, [me]);
 
   const isDirty = useMemo(() => {
     if (!me) return false;
     const n = name.trim();
-    const i = image.trim();
     const b = bio.trim();
-    return (me.name ?? "") !== n || (me.image ?? "") !== i || (me.bio ?? "") !== b;
-  }, [me, name, image, bio]);
+    return (me.name ?? "") !== n || (me.bio ?? "") !== b;
+  }, [me, name, bio]);
 
   useEffect(() => {
     let mounted = true;
@@ -65,7 +60,6 @@ export function ProfileClient() {
         if (!mounted) return;
         setMe(json.user);
         setName(json.user.name ?? "");
-        setImage(json.user.image ?? "");
         setBio(json.user.bio ?? "");
       } catch {
         if (!mounted) return;
@@ -87,7 +81,6 @@ export function ProfileClient() {
     try {
       const payload = {
         name: name.trim(),
-        image: image.trim(),
         bio: bio.trim()
       };
       const res = await fetch("/api/me/profile", {
@@ -106,7 +99,6 @@ export function ProfileClient() {
       if (json?.user) {
         setMe(json.user);
         setName(json.user.name ?? "");
-        setImage(json.user.image ?? "");
         setBio(json.user.bio ?? "");
       }
       setNotice("Saved.");
@@ -143,7 +135,7 @@ export function ProfileClient() {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
-        <AvatarPreview name={name.trim() || null} email={me.email} image={normalizedImageForPreview} />
+        <AvatarPreview name={name.trim() || null} email={me.email} image={imageForPreview} />
         <div className="min-w-0">
           <div className="truncate text-sm font-semibold text-zinc-100">{name.trim() || me.email}</div>
           <div className="truncate text-xs text-zinc-500">{me.email}</div>
@@ -161,17 +153,6 @@ export function ProfileClient() {
             className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-zinc-600"
           />
           <div className="mt-1 text-[11px] text-zinc-600">{name.trim().length}/50</div>
-        </div>
-
-        <div>
-          <label className="block text-xs font-medium text-zinc-300">Avatar URL</label>
-          <input
-            value={image}
-            onChange={(e) => setImage(e.target.value)}
-            placeholder="https://…"
-            className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-zinc-600"
-          />
-          <div className="mt-1 text-[11px] text-zinc-600">Leave empty to use the default avatar.</div>
         </div>
 
         <div>
@@ -204,7 +185,7 @@ export function ProfileClient() {
           >
             {saving ? "Saving…" : "Save"}
           </button>
-          <div className="text-xs text-zinc-600">Public fields: name, avatar, bio.</div>
+          <div className="text-xs text-zinc-600">Public fields: name, bio.</div>
         </div>
       </div>
     </div>
