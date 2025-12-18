@@ -20,7 +20,7 @@ function Avatar({ user }: { user: Pick<PublicUser, "name" | "email" | "image"> }
     <img
       src={src}
       alt={label}
-      className="h-14 w-14 rounded-full border border-zinc-800 object-cover"
+      className="h-14 w-14 rounded-full border border-chat-border object-cover"
       onError={(e) => {
         const el = e.currentTarget;
         if (el.src.endsWith("/avatar-placeholder.svg")) return;
@@ -67,17 +67,17 @@ export function UserProfileClient({ userId }: { userId: string }) {
     };
   }, [userId]);
 
-  if (loading) return <div className="text-sm text-zinc-500">Loading…</div>;
+  if (loading) return <div className="text-sm text-chat-muted">Loading…</div>;
 
   if (error) {
     return (
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4 text-sm text-zinc-200">
+      <div className="rounded-chat-lg border border-chat-border bg-chat-bg/50 p-4 text-sm text-chat-text">
         <div className="font-medium">Couldn’t load profile</div>
-        <div className="mt-1 text-zinc-400">{error}</div>
+        <div className="mt-1 text-chat-muted">{error}</div>
         <button
           type="button"
           onClick={() => window.location.reload()}
-          className="mt-3 inline-flex rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-900"
+          className="mt-3 inline-flex rounded-chat-lg border border-chat-border bg-chat-surface px-3 py-2 text-xs font-medium text-chat-text/90 hover:bg-chat-bg"
         >
           Refresh
         </button>
@@ -117,8 +117,8 @@ export function UserProfileClient({ userId }: { userId: string }) {
         <div className="flex min-w-0 items-center gap-4">
         <Avatar user={user} />
         <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-zinc-100">{title}</div>
-          <div className="truncate text-xs text-zinc-500">{user.email}</div>
+          <div className="truncate text-sm font-semibold text-chat-text">{title}</div>
+          <div className="truncate text-xs text-chat-muted">{user.email}</div>
         </div>
         </div>
 
@@ -128,8 +128,8 @@ export function UserProfileClient({ userId }: { userId: string }) {
             onClick={startChat}
             disabled={chatting}
             className={[
-              "shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium",
-              chatting ? "bg-zinc-800 text-zinc-500" : "bg-zinc-100 text-zinc-950 hover:bg-white"
+              "shrink-0 rounded-chat-lg px-3 py-2 text-xs font-semibold",
+              chatting ? "border border-chat-border bg-chat-bg text-chat-muted" : "bg-chat-primary text-chat-primary-foreground hover:brightness-[0.98]"
             ].join(" ")}
           >
             {chatting ? "Starting…" : "Chat"}
@@ -137,12 +137,12 @@ export function UserProfileClient({ userId }: { userId: string }) {
         ) : null}
       </div>
 
-      {chatError ? <div className="text-sm text-red-400">{chatError}</div> : null}
+      {chatError ? <div className="text-sm text-red-700">{chatError}</div> : null}
 
-      <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-4">
-        <div className="text-xs font-medium text-zinc-400">Bio</div>
-        <div className="mt-2 whitespace-pre-wrap text-sm text-zinc-100">
-          {user.bio?.trim() ? user.bio : <span className="text-zinc-500">No bio yet.</span>}
+      <div className="rounded-chat-lg border border-chat-border bg-chat-surface2 p-4">
+        <div className="text-xs font-medium text-chat-muted">Bio</div>
+        <div className="mt-2 whitespace-pre-wrap text-sm text-chat-text">
+          {user.bio?.trim() ? user.bio : <span className="text-chat-muted">No bio yet.</span>}
         </div>
       </div>
     </div>

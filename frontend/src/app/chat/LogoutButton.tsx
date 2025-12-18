@@ -2,8 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { IconLogout } from "@/app/_components/icons";
 
-export function LogoutButton() {
+export function LogoutButton({ className, iconOnly }: { className?: string; iconOnly?: boolean }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
 
@@ -24,9 +25,23 @@ export function LogoutButton() {
       type="button"
       onClick={logout}
       disabled={loading}
-      className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-70"
+      aria-label={iconOnly ? (loading ? "Logging out…" : "Logout") : undefined}
+      className={[
+        "inline-flex items-center justify-center rounded-chat-lg border border-chat-border bg-chat-surface px-3 py-2 text-xs font-medium text-chat-text/90 hover:bg-chat-bg disabled:cursor-not-allowed disabled:opacity-60",
+        className ?? ""
+      ].join(" ")}
     >
-      {loading ? "Logging out…" : "Logout"}
+      {iconOnly ? (
+        loading ? (
+          <span className="h-4 w-4 animate-spin rounded-full border-2 border-chat-border border-t-chat-primary" />
+        ) : (
+          <IconLogout className="h-5 w-5" />
+        )
+      ) : loading ? (
+        "Logging out…"
+      ) : (
+        "Logout"
+      )}
     </button>
   );
 }

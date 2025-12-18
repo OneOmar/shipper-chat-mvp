@@ -3,12 +3,14 @@
 import type { Socket } from "socket.io-client";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import { LogoutButton } from "./LogoutButton";
 import { useChatShell } from "./ChatShell";
 import { useUnreadIndicator } from "./useUnreadIndicator";
 import { createClientSocket } from "@/lib/socket-client";
+import { IconFilter, IconHome, IconMessage, IconSearch, IconStar, IconUser } from "@/app/_components/icons";
 
 type User = { id: string; name: string | null; email: string; image: string | null };
 type OnlineUser = { userId: string; email: string };
@@ -21,7 +23,7 @@ function Avatar({ user }: { user: User }) {
     <img
       src={src}
       alt={label}
-      className="h-9 w-9 rounded-full object-cover"
+      className="h-full w-full rounded-full object-cover"
       onError={(e) => {
         const el = e.currentTarget;
         if (el.src.endsWith("/avatar-placeholder.svg")) return;
@@ -45,6 +47,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pendingUserId, setPendingUserId] = useState<string | null>(null);
   const [socket, setSocket] = useState<Socket | null>(null);
+  const [messageSearch, setMessageSearch] = useState("");
 
   const isChatRoute = useMemo(() => (pathname ?? "").startsWith("/chat"), [pathname]);
 
@@ -170,126 +173,210 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   }
 
   return (
-    <aside className="flex h-full w-80 shrink-0 flex-col border-r border-zinc-800 bg-zinc-950">
-      <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
-        <div>
-          <div className="text-sm font-semibold text-zinc-100">Users</div>
-          <div className="text-xs text-zinc-500">{socket ? "Live" : "Offline"}</div>
+    <aside className="flex h-full min-h-0 w-full">
+      {/* Icon rail (matches Figma left strip) */}
+      <div className="flex w-[76px] shrink-0 flex-col items-center border-r border-chat-border bg-chat-surface px-3 py-5">
+        <div className="relative h-11 w-11 overflow-hidden rounded-full">
+          <Image src="/logo.png" alt="Shipper Chat" width={44} height={44} className="h-11 w-11" priority />
         </div>
-        <div className="flex items-center gap-2">
-          <Link
-            href="/profile"
-            onClick={() => onNavigate?.()}
-            className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-900"
-          >
-            Profile
-          </Link>
-          <LogoutButton />
-        </div>
-      </div>
 
-      <div className="flex-1 overflow-auto p-2">
-        <div className="mb-2">
+        <div className="mt-6 flex flex-col items-center gap-2">
+          <Link
+            href="/"
+            onClick={() => onNavigate?.()}
+            className={[
+              "inline-flex h-11 w-11 items-center justify-center rounded-chat-lg border transition-colors",
+              pathname === "/" ? "border-chat-primary bg-chat-bg text-chat-primary" : "border-transparent text-chat-text/70 hover:bg-chat-bg"
+            ].join(" ")}
+            aria-label="Home"
+          >
+            <IconHome className="h-5 w-5" />
+          </Link>
+
+          <Link
+            href="/chat"
+            onClick={() => onNavigate?.()}
+            className={[
+              "inline-flex h-11 w-11 items-center justify-center rounded-chat-lg border transition-colors",
+              (pathname ?? "").startsWith("/chat")
+                ? "border-chat-primary bg-chat-bg text-chat-primary"
+                : "border-transparent text-chat-text/70 hover:bg-chat-bg"
+            ].join(" ")}
+            aria-label="Chat"
+          >
+            <IconMessage className="h-5 w-5" />
+          </Link>
+
           <button
             type="button"
             onClick={openAiChat}
             disabled={pendingUserId !== null}
             className={[
-              "flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left",
+              "inline-flex h-11 w-11 items-center justify-center rounded-chat-lg border transition-colors",
               activeUserId === "ai"
-                ? "bg-zinc-900 text-zinc-100 border border-zinc-700"
-                : "hover:bg-zinc-900/60 text-zinc-200 border border-transparent"
+                ? "border-chat-primary bg-chat-bg text-chat-primary"
+                : "border-transparent text-chat-text/70 hover:bg-chat-bg disabled:opacity-60"
             ].join(" ")}
+            aria-label="Chat with AI"
           >
-            <div className="relative">
-              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-indigo-600 text-xs font-semibold text-white">
-                AI
-              </div>
-              <span
-                className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-indigo-400 ring-2 ring-zinc-950"
-                aria-label="ai"
-              />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium">Chat with AI</div>
-              <div className="truncate text-xs text-zinc-500">Ask anything</div>
-            </div>
-            {pendingUserId === "ai" ? (
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-500 border-t-transparent" />
-            ) : null}
+            <IconStar className="h-5 w-5" />
           </button>
         </div>
 
-        {loadError ? (
-          <div className="px-3 py-2 text-sm text-zinc-400">
-            <div>{loadError}</div>
+        <div className="mt-auto flex flex-col items-center gap-2">
+          <Link
+            href="/profile"
+            onClick={() => onNavigate?.()}
+            className="inline-flex h-11 w-11 items-center justify-center rounded-chat-lg border border-chat-border bg-chat-surface text-chat-text/80 hover:bg-chat-bg"
+            aria-label="Profile"
+          >
+            <IconUser className="h-5 w-5" />
+          </Link>
+          <LogoutButton iconOnly className="h-11 w-11 px-0" />
+        </div>
+      </div>
+
+      {/* Main list */}
+      <div className="flex min-w-0 flex-1 flex-col bg-chat-surface">
+        <div className="border-b border-chat-border px-5 py-5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-[18px] font-semibold leading-tight tracking-[-0.01em] text-chat-text">
+                Message
+              </div>
+              <div className="mt-1 text-xs text-chat-muted">{socket ? "Live" : "Offline"}</div>
+            </div>
+
+            {pendingUserId ? (
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-chat-border border-t-chat-primary" aria-label="Loading" />
+            ) : null}
+          </div>
+
+          {/* Search in message (visual-only; no filtering behavior) */}
+          <div className="mt-4 flex items-center gap-2">
+            <div className="relative min-w-0 flex-1">
+              <IconSearch className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-chat-muted" />
+              <input
+                value={messageSearch}
+                onChange={(e) => setMessageSearch(e.target.value)}
+                placeholder="Search in message"
+                aria-label="Search in message"
+                className="h-11 w-full rounded-chat-lg border border-chat-border bg-chat-surface px-10 pr-3 text-sm text-chat-text placeholder:text-chat-muted/70 outline-none focus:border-chat-primary focus:ring-2 focus:ring-chat-ring/20"
+              />
+            </div>
             <button
               type="button"
-              onClick={() => window.location.reload()}
-              className="mt-2 inline-flex rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-900"
+              aria-label="Filter"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-chat-lg border border-chat-border bg-chat-surface text-chat-muted hover:bg-chat-bg"
             >
-              Retry
+              <IconFilter className="h-5 w-5" />
             </button>
           </div>
-        ) : loading ? (
-          <div className="px-3 py-2 text-sm text-zinc-500">Loading…</div>
-        ) : users.length === 0 ? (
-          <div className="px-3 py-2 text-sm text-zinc-500">No users found.</div>
-        ) : (
-          <ul className="space-y-1">
-            {users.map((u) => {
-              const isOnline = online.has(u.id);
-              const isActive = activeUserId === u.id;
-              const unread = unreadByUserId[u.id] ?? 0;
-              const showUnread = !isActive && unread > 0;
-              return (
-                <li key={u.id}>
-                  <button
-                    type="button"
-                    onClick={() => openChat(u.id)}
-                    disabled={pendingUserId !== null}
-                    className={[
-                      "flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left",
-                      isActive
-                        ? "bg-zinc-900 text-zinc-100 border border-zinc-700"
-                        : showUnread
-                          ? "bg-emerald-950/30 text-zinc-100 border border-emerald-900/60 hover:bg-emerald-950/40"
-                          : "hover:bg-zinc-900/60 text-zinc-200 border border-transparent"
-                    ].join(" ")}
-                  >
-                    <div className="relative">
-                      <Avatar user={u} />
-                      <span
-                        className={[
-                          "absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ring-2 ring-zinc-950",
-                          isOnline ? "bg-emerald-500" : "bg-zinc-600"
-                        ].join(" ")}
-                        aria-label={isOnline ? "online" : "offline"}
-                      />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium">{u.name || u.email}</div>
-                      <div className="truncate text-xs text-zinc-500">{u.email}</div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {showUnread ? (
+        </div>
+
+        <div className="flex-1 overflow-auto p-3">
+          {/* AI entry */}
+          <div className="mb-2">
+            <button
+              type="button"
+              onClick={openAiChat}
+              disabled={pendingUserId !== null}
+              className={[
+                "flex w-full items-center gap-3 rounded-chat-lg border px-3.5 py-3 text-left transition-colors",
+                activeUserId === "ai"
+                  ? "border-chat-primary bg-chat-bg"
+                  : "border-transparent hover:border-chat-border hover:bg-chat-bg/60"
+              ].join(" ")}
+            >
+              <div className="relative">
+                <div className="flex h-11 w-11 items-center justify-center rounded-full bg-chat-primary text-xs font-semibold text-chat-primary-foreground">
+                  AI
+                </div>
+                <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-chat-primary ring-2 ring-chat-surface" aria-label="ai" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-semibold text-chat-text">Chat with AI</div>
+                <div className="truncate text-xs text-chat-muted">Ask anything</div>
+              </div>
+              {pendingUserId === "ai" ? (
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-chat-border border-t-chat-primary" />
+              ) : null}
+            </button>
+          </div>
+
+          {loadError ? (
+            <div className="rounded-chat-lg border border-chat-border bg-chat-bg/50 px-3 py-3 text-sm text-chat-muted">
+              <div>{loadError}</div>
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="mt-2 inline-flex rounded-chat-lg border border-chat-border bg-chat-surface px-3 py-2 text-xs font-medium text-chat-text/90 hover:bg-chat-bg"
+              >
+                Retry
+              </button>
+            </div>
+          ) : loading ? (
+            <div className="px-3 py-2 text-sm text-chat-muted">Loading…</div>
+          ) : users.length === 0 ? (
+            <div className="px-3 py-2 text-sm text-chat-muted">No users found.</div>
+          ) : (
+            <ul className="space-y-1.5">
+              {users.map((u) => {
+                const isOnline = online.has(u.id);
+                const isActive = activeUserId === u.id;
+                const unread = unreadByUserId[u.id] ?? 0;
+                const showUnread = !isActive && unread > 0;
+                return (
+                  <li key={u.id}>
+                    <button
+                      type="button"
+                      onClick={() => openChat(u.id)}
+                      disabled={pendingUserId !== null}
+                      className={[
+                        "flex w-full items-center gap-3 rounded-chat-lg border px-3.5 py-3 text-left transition-colors",
+                        isActive
+                          ? "border-chat-primary bg-chat-bg"
+                          : showUnread
+                            ? "border-chat-border bg-chat-bg/60 hover:bg-chat-bg"
+                            : "border-transparent hover:border-chat-border hover:bg-chat-bg/60"
+                      ].join(" ")}
+                    >
+                      <div className="relative">
+                        <div className="h-11 w-11">
+                          <Avatar user={u} />
+                        </div>
                         <span
-                          className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-emerald-500 px-1.5 text-[11px] font-semibold text-zinc-950"
-                          aria-label={`${unread} unread messages`}
-                        >
-                          {unread > 99 ? "99+" : unread}
-                        </span>
-                      ) : null}
-                      {pendingUserId === u.id ? (
-                        <div className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-500 border-t-transparent" />
-                      ) : null}
-                    </div>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+                          className={[
+                            "absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ring-2 ring-chat-surface",
+                            isOnline ? "bg-chat-primary" : "bg-chat-border"
+                          ].join(" ")}
+                          aria-label={isOnline ? "online" : "offline"}
+                        />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-semibold text-chat-text">{u.name || u.email}</div>
+                        <div className="truncate text-xs text-chat-muted">{u.email}</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {showUnread ? (
+                          <span
+                            className="inline-flex h-6 min-w-[24px] items-center justify-center rounded-full bg-chat-primary px-2 text-[11px] font-semibold text-chat-primary-foreground"
+                            aria-label={`${unread} unread messages`}
+                          >
+                            {unread > 99 ? "99+" : unread}
+                          </span>
+                        ) : null}
+                        {pendingUserId === u.id ? (
+                          <div className="h-4 w-4 animate-spin rounded-full border-2 border-chat-border border-t-chat-primary" />
+                        ) : null}
+                      </div>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
       </div>
     </aside>
   );
