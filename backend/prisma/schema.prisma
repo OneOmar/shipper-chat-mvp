@@ -28,6 +28,7 @@ model User {
 
   participants Participant[]
   messages      Message[]     @relation("UserMessages")
+  reactions     MessageReaction[]
 }
 
 model ChatSession {
@@ -60,9 +61,24 @@ model Message {
 
   sender    User        @relation("UserMessages", fields: [senderId], references: [id], onDelete: Cascade)
   session   ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  reactions MessageReaction[]
 
   @@index([sessionId, createdAt])
   @@index([senderId])
+}
+
+model MessageReaction {
+  id        String   @id @default(cuid())
+  messageId String
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([messageId])
 }
 
 

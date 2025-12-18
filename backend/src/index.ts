@@ -84,6 +84,7 @@ export type ReceiveMessageEvent = {
   sessionId: string;
   createdAt: string;
   sender: { id: string; name: string | null; email: string; image: string | null };
+  reactions?: Array<{ emoji: string; count: number }>;
 };
 
 export type AiMessageStartEvent = { tempId: string; sessionId: string; sender: ReceiveMessageEvent["sender"] };
@@ -94,6 +95,7 @@ export type TypingEvent = { sessionId: string; userId: string };
 export type MessagesReadEvent = { sessionId: string; messageIds: string[] };
 export type MessagesReadUpdateEvent = { sessionId: string; readerId: string; messageIds: string[] };
 export type MessageDeletedEvent = { sessionId: string; messageId: string; deletedBy: string };
+export type MessageReactionsEvent = { sessionId: string; messageId: string; reactions: Array<{ emoji: string; count: number }> };
 
 type OnlineUser = {
   userId: string;
@@ -297,7 +299,8 @@ export function attachSocketServer(server: HttpServer) {
             senderId: created.senderId,
             sessionId: created.sessionId,
             createdAt: created.createdAt.toISOString(),
-            sender: created.sender
+            sender: created.sender,
+            reactions: []
           };
 
           io.to(`session:${sessionId}`).emit("receive_message", event);
@@ -359,7 +362,8 @@ export function attachSocketServer(server: HttpServer) {
               senderId: aiMsg.senderId,
               sessionId: aiMsg.sessionId,
               createdAt: aiMsg.createdAt.toISOString(),
-              sender: aiMsg.sender
+              sender: aiMsg.sender,
+              reactions: []
             };
 
             io.to(`session:${sessionId}`).emit("ai_message_done", {
@@ -423,6 +427,77 @@ export function attachSocketServer(server: HttpServer) {
           ack?.({ ok: true });
         } catch {
           ack?.({ error: "Failed to delete message" });
+        }
+      }
+    );
+
+    socket.on(
+      "react_message",
+      async (
+        payload: { sessionId: string; messageId: string; emoji: string },
+        ack?: (resp: { ok: true; reactions: MessageReactionsEvent["reactions"] } | { error: string }) => void
+      ) => {
+        try {
+          const sessionId = typeof payload?.sessionId === "string" ? payload.sessionId : "";
+          const messageId = typeof payload?.messageId === "string" ? payload.messageId : "";
+          const emoji = typeof payload?.emoji === "string" ? payload.emoji.trim() : "";
+          if (!sessionId || !messageId || !emoji) {
+            ack?.({ error: "Invalid payload" });
+            return;
+          }
+          if (emoji.length > 16) {
+            ack?.({ error: "Invalid emoji" });
+            return;
+          }
+
+          const participant = await prisma.participant.findUnique({
+            where: { userId_sessionId: { userId: user.userId, sessionId } }
+          });
+          if (!participant) {
+            ack?.({ error: "Unauthorized" });
+            return;
+          }
+
+          const msg = await prisma.message.findUnique({
+            where: { id: messageId },
+            select: { id: true, sessionId: true }
+          });
+          if (!msg || msg.sessionId !== sessionId) {
+            ack?.({ error: "Not found" });
+            return;
+          }
+
+          const existing = await prisma.messageReaction.findUnique({
+            where: { messageId_userId: { messageId, userId: user.userId } },
+            select: { id: true, emoji: true }
+          });
+
+          if (existing) {
+            if (existing.emoji === emoji) {
+              await prisma.messageReaction.delete({ where: { id: existing.id } });
+            } else {
+              await prisma.messageReaction.update({ where: { id: existing.id }, data: { emoji } });
+            }
+          } else {
+            await prisma.messageReaction.create({ data: { messageId, userId: user.userId, emoji } });
+          }
+
+          const grouped = await prisma.messageReaction.groupBy({
+            by: ["emoji"],
+            where: { messageId },
+            _count: { _all: true }
+          });
+          const reactions = grouped
+            .map((g) => ({ emoji: g.emoji, count: g._count._all }))
+            .sort((a, b) => b.count - a.count || a.emoji.localeCompare(b.emoji));
+
+          io.to(`session:${sessionId}`).emit(
+            "message_reactions",
+            { sessionId, messageId, reactions } satisfies MessageReactionsEvent
+          );
+          ack?.({ ok: true, reactions });
+        } catch {
+          ack?.({ error: "Failed to react" });
         }
       }
     );
@@ -846,10 +921,10 @@ app.put("/api/me/profile", requireAuth, asyncHandler(async (req: Request, res: R
 
   function normalizeOptionalText(v: unknown, maxLen: number) {
     if (v === undefined) return { ok: true as const, value: undefined as string | null | undefined };
-    if (v === null) return { ok: true as const, value: null as const };
+    if (v === null) return { ok: true as const, value: null as null };
     if (typeof v !== "string") return { ok: false as const, error: "Invalid payload" };
     const trimmed = v.trim();
-    if (!trimmed) return { ok: true as const, value: null as const };
+    if (!trimmed) return { ok: true as const, value: null as null };
     if (trimmed.length > maxLen) return { ok: false as const, error: `Must be <= ${maxLen} characters` };
     return { ok: true as const, value: trimmed };
   }
@@ -938,6 +1013,27 @@ app.get("/api/chat/session/:sessionId/bootstrap", requireAuth, asyncHandler(asyn
     include: { sender: { select: { id: true, name: true, email: true, image: true } } }
   });
 
+  const messageIds = messages.map((m) => m.id);
+  const reactionGroups =
+    messageIds.length === 0
+      ? []
+      : await prisma.messageReaction.groupBy({
+          by: ["messageId", "emoji"],
+          where: { messageId: { in: messageIds } },
+          _count: { _all: true }
+        });
+
+  const reactionsByMessageId = new Map<string, Array<{ emoji: string; count: number }>>();
+  for (const g of reactionGroups) {
+    const list = reactionsByMessageId.get(g.messageId) ?? [];
+    list.push({ emoji: g.emoji, count: g._count._all });
+    reactionsByMessageId.set(g.messageId, list);
+  }
+  for (const [id, list] of reactionsByMessageId) {
+    list.sort((a, b) => b.count - a.count || a.emoji.localeCompare(b.emoji));
+    reactionsByMessageId.set(id, list);
+  }
+
   return res.json({
     meUserId: me.sub,
     sessionId,
@@ -949,7 +1045,8 @@ app.get("/api/chat/session/:sessionId/bootstrap", requireAuth, asyncHandler(asyn
       senderId: m.senderId,
       sessionId: m.sessionId,
       createdAt: m.createdAt.toISOString(),
-      sender: m.sender
+      sender: m.sender,
+      reactions: reactionsByMessageId.get(m.id) ?? []
     }))
   });
 }));

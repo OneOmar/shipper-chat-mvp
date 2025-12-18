@@ -16,6 +16,7 @@ type Message = {
   sessionId: string;
   createdAt: string;
   sender: User;
+  reactions?: Array<{ emoji: string; count: number }>;
 };
 
 type AiMessageStartEvent = { tempId: string; sessionId: string; sender: User };
@@ -25,9 +26,14 @@ type AiMessageDoneEvent = { tempId: string; sessionId: string; message: Message 
 type TypingEvent = { sessionId: string; userId: string };
 type MessagesReadUpdateEvent = { sessionId: string; readerId: string; messageIds: string[] };
 type MessageDeletedEvent = { sessionId: string; messageId: string; deletedBy: string };
+type MessageReactionsEvent = { sessionId: string; messageId: string; reactions: Array<{ emoji: string; count: number }> };
 
 function isAi(sender: User) {
   return sender.name === "AI" || sender.email === "ai@local";
+}
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
 }
 
 function MiniAvatar({ sender }: { sender: User }) {
@@ -89,6 +95,17 @@ export function ChatClient({
   const isTypingRef = useRef(false);
   const typingStopTimerRef = useRef<number | null>(null);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
+  const [myReactionByMessageId, setMyReactionByMessageId] = useState<Record<string, string | null>>({});
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [messageMenu, setMessageMenu] = useState<null | {
+    messageId: string;
+    mine: boolean;
+    content: string;
+    anchor: { top: number; left: number; right: number; bottom: number; width: number; height: number };
+    placement: "above" | "below";
+    pos: { top: number; left: number };
+  }>(null);
 
   // Read receipts (frontend-only)
   const [readByOtherIds, setReadByOtherIds] = useState<Set<string>>(new Set());
@@ -202,6 +219,12 @@ export function ChatClient({
       if (evt.sessionId !== sessionId) return;
       setMessages((prev) => prev.filter((m) => m.id !== evt.messageId));
       setSelectedMessageId((prev) => (prev === evt.messageId ? null : prev));
+      setMyReactionByMessageId((prev) => {
+        if (!(evt.messageId in prev)) return prev;
+        const next = { ...prev };
+        delete next[evt.messageId];
+        return next;
+      });
       setReadByOtherIds((prev) => {
         if (!prev.has(evt.messageId)) return prev;
         const next = new Set(prev);
@@ -212,6 +235,64 @@ export function ChatClient({
     },
     [sessionId]
   );
+
+  const handleMessageReactions = useCallback(
+    (evt: MessageReactionsEvent) => {
+      if (evt.sessionId !== sessionId) return;
+      setMessages((prev) => prev.map((m) => (m.id === evt.messageId ? { ...m, reactions: evt.reactions } : m)));
+    },
+    [sessionId]
+  );
+
+  useEffect(() => {
+    if (!messageMenu) return;
+    const el = menuRef.current;
+    if (!el) return;
+
+    const rect = el.getBoundingClientRect();
+    const pad = 10;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    const desiredLeft = messageMenu.anchor.left + messageMenu.anchor.width / 2 - rect.width / 2;
+    const left = clamp(desiredLeft, pad, vw - rect.width - pad);
+
+    const aboveTop = messageMenu.anchor.top - rect.height - 8;
+    const belowTop = messageMenu.anchor.bottom + 8;
+    const canPlaceAbove = aboveTop >= pad;
+    const canPlaceBelow = belowTop + rect.height <= vh - pad;
+
+    const placement =
+      messageMenu.placement === "above"
+        ? canPlaceAbove
+          ? "above"
+          : "below"
+        : canPlaceBelow
+          ? "below"
+          : "above";
+
+    const top = clamp(placement === "above" ? aboveTop : belowTop, pad, vh - rect.height - pad);
+
+    if (Math.abs(messageMenu.pos.left - left) > 0.5 || Math.abs(messageMenu.pos.top - top) > 0.5) {
+      setMessageMenu((prev) => (prev ? { ...prev, placement, pos: { top, left } } : prev));
+    }
+  }, [messageMenu]);
+
+  useEffect(() => {
+    if (!messageMenu) {
+      setMenuOpen(false);
+      return;
+    }
+    // Trigger enter animation after mount.
+    setMenuOpen(false);
+    window.requestAnimationFrame(() => setMenuOpen(true));
+  }, [messageMenu]);
+
+  function closeMessageMenu() {
+    setMenuOpen(false);
+    // Allow exit animation to play before unmount.
+    window.setTimeout(() => setMessageMenu(null), 120);
+  }
 
   useEffect(() => {
     let s: Socket | null = null;
@@ -301,6 +382,7 @@ export function ChatClient({
       });
 
       s.on("message_deleted", handleMessageDeleted);
+      s.on("message_reactions", handleMessageReactions);
 
       s.emit("join_session", sessionId, (ok: boolean) => {
         setJoined(ok);
@@ -330,7 +412,16 @@ export function ChatClient({
       setSocket(null);
       socketRef.current = null;
     };
-  }, [sessionId, reconnectKey, emitReadForVisibleChat, clearRemoteTyping, setRemoteTyping, meUserId, handleMessageDeleted]);
+  }, [
+    sessionId,
+    reconnectKey,
+    emitReadForVisibleChat,
+    clearRemoteTyping,
+    setRemoteTyping,
+    meUserId,
+    handleMessageDeleted,
+    handleMessageReactions
+  ]);
 
   useEffect(() => {
     // Reset ephemeral state when switching chats.
@@ -338,6 +429,10 @@ export function ChatClient({
     setReadByOtherIds(new Set());
     setTypingUserIds(new Set());
     isTypingRef.current = false;
+    setSelectedMessageId(null);
+    setMyReactionByMessageId({});
+    setMessageMenu(null);
+    setMenuOpen(false);
   }, [sessionId]);
 
   async function deleteMyMessage(messageId: string) {
@@ -359,6 +454,50 @@ export function ChatClient({
         setError("Failed to delete message");
       }
     });
+  }
+
+  async function reactToMessage(messageId: string, emoji: string) {
+    const s = socketRef.current;
+    if (!s || !connectedRef.current || !joinedRef.current) return;
+
+    setMyReactionByMessageId((prev) => {
+      const current = prev[messageId] ?? null;
+      return { ...prev, [messageId]: current === emoji ? null : emoji };
+    });
+
+    s.emit(
+      "react_message",
+      { sessionId, messageId, emoji },
+      (resp: { ok: true; reactions: MessageReactionsEvent["reactions"] } | { error: string }) => {
+        if (!resp || "error" in resp) return;
+        setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, reactions: resp.reactions } : m)));
+      }
+    );
+  }
+
+  async function copyMessage(text: string) {
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+    } catch {
+      // fall through
+    }
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      ta.style.top = "0";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    } catch {
+      // ignore
+    }
   }
 
   useEffect(() => {
@@ -498,7 +637,10 @@ export function ChatClient({
 
       <div
         className="flex min-h-0 flex-1 flex-col overflow-auto px-6 py-4"
-        onClick={() => setSelectedMessageId(null)}
+        onClick={() => {
+          setSelectedMessageId(null);
+          closeMessageMenu();
+        }}
       >
         {messages.length === 0 ? (
           <div className="flex flex-1 items-center justify-center">
@@ -512,59 +654,155 @@ export function ChatClient({
             {messages.map((m) => {
               const mine = m.senderId === meUserId;
               const showRead = mine && !!otherUser && readByOtherIds.has(m.id);
-              const canDelete = mine && !m.id.startsWith("temp:");
+              const isPersisted = !m.id.startsWith("temp:");
               const isSelected = selectedMessageId === m.id;
+              const reactions = m.reactions ?? [];
+              const myReaction = myReactionByMessageId[m.id] ?? null;
               return (
                 <div key={m.id} className={mine ? "flex justify-end" : "flex justify-start"}>
                   <div
                     className={["flex max-w-[90%] items-end gap-2", mine ? "justify-end" : "justify-start"].join(" ")}
                   >
                     {mine ? null : <MiniAvatar sender={m.sender} />}
-                    <div
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (!canDelete) return;
-                        setSelectedMessageId((prev) => (prev === m.id ? null : m.id));
-                      }}
-                      className={[
-                        "rounded-2xl px-3 py-2 text-sm",
-                        canDelete && isSelected ? "ring-2 ring-zinc-400/40" : "",
-                        mine
-                          ? "bg-zinc-100 text-zinc-900"
-                          : isAi(m.sender)
-                            ? "bg-indigo-950/40 text-zinc-100 border border-indigo-900/50"
-                            : "bg-zinc-900/60 text-zinc-100 border border-zinc-800"
-                      ].join(" ")}
-                    >
-                      <div className="whitespace-pre-wrap break-words">{m.content}</div>
-                      <div className={["mt-1 flex items-center justify-between gap-2 text-[11px]", mine ? "text-zinc-600" : "text-zinc-400"].join(" ")}>
-                        {mine ? (
-                          <span className="inline-flex items-center gap-1">
-                            <span>You</span>
-                            {showRead ? <span aria-label="Read receipt">✓✓</span> : null}
+                    <div className="relative group">
+                      {/* Hover / desktop trigger (WhatsApp-style) */}
+                      {isPersisted ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                            const anchor = {
+                              top: r.top,
+                              left: r.left,
+                              right: r.right,
+                              bottom: r.bottom,
+                              width: r.width,
+                              height: r.height
+                            };
+                            setSelectedMessageId(m.id);
+                            setMessageMenu({
+                              messageId: m.id,
+                              mine,
+                              content: m.content,
+                              anchor,
+                              placement: "above",
+                              pos: {
+                                top: clamp(anchor.top - 240, 10, window.innerHeight - 10),
+                                left: clamp(anchor.left + anchor.width / 2 - 140, 10, window.innerWidth - 10)
+                              }
+                            });
+                          }}
+                          aria-label="Message menu"
+                          className={[
+                            "hidden md:inline-flex absolute top-1 z-10 h-6 w-6 items-center justify-center rounded-full border border-zinc-800 bg-zinc-950/80 text-xs text-zinc-200 shadow-sm",
+                            "opacity-0 transition-opacity group-hover:opacity-100",
+                            // Place on inner top corner
+                            mine ? "left-1" : "right-1"
+                          ].join(" ")}
+                        >
+                          <span aria-hidden="true" className="text-base leading-none">
+                            ˅
                           </span>
-                        ) : (
-                          m.sender.name || m.sender.email
-                        )}
-                        {canDelete && isSelected ? (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (!window.confirm("Delete this message?")) return;
-                              void deleteMyMessage(m.id);
-                              focusComposer();
-                              setSelectedMessageId(null);
-                            }}
-                            className="inline-flex h-6 w-6 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-900/50 hover:text-zinc-200"
-                            aria-label="Delete message"
-                          >
-                            <span aria-hidden="true" className="text-base leading-none">
-                              ×
+                        </button>
+                      ) : null}
+
+                      <div
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (!isPersisted) return;
+                          const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                          const anchor = {
+                            top: r.top,
+                            left: r.left,
+                            right: r.right,
+                            bottom: r.bottom,
+                            width: r.width,
+                            height: r.height
+                          };
+                          setSelectedMessageId(m.id);
+                          setMessageMenu({
+                            messageId: m.id,
+                            mine,
+                            content: m.content,
+                            anchor,
+                            placement: "above",
+                            pos: {
+                              top: clamp(anchor.top - 240, 10, window.innerHeight - 10),
+                              left: clamp(anchor.left + anchor.width / 2 - 140, 10, window.innerWidth - 10)
+                            }
+                          });
+                        }}
+                        className={[
+                          "rounded-2xl px-3 py-2 text-sm",
+                          isPersisted && isSelected ? "ring-2 ring-zinc-400/40" : "",
+                          mine
+                            ? "bg-zinc-100 text-zinc-900"
+                            : isAi(m.sender)
+                              ? "bg-indigo-950/40 text-zinc-100 border border-indigo-900/50"
+                              : "bg-zinc-900/60 text-zinc-100 border border-zinc-800"
+                        ].join(" ")}
+                      >
+                        <div className="whitespace-pre-wrap break-words">{m.content}</div>
+
+                        <div className={["mt-1 flex items-center justify-between gap-2 text-[11px]", mine ? "text-zinc-600" : "text-zinc-400"].join(" ")}>
+                          {mine ? (
+                            <span className="inline-flex items-center gap-1">
+                              <span>You</span>
+                              {showRead ? <span aria-label="Read receipt">✓✓</span> : null}
                             </span>
-                          </button>
-                        ) : null}
+                          ) : (
+                            m.sender.name || m.sender.email
+                          )}
+                        </div>
                       </div>
+
+                      {/* Reactions chip (WhatsApp-like placement: hugs the bubble) */}
+                      {reactions.length ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (!isPersisted) return;
+                            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                            const anchor = {
+                              top: r.top,
+                              left: r.left,
+                              right: r.right,
+                              bottom: r.bottom,
+                              width: r.width,
+                              height: r.height
+                            };
+                            setSelectedMessageId(m.id);
+                            setMessageMenu({
+                              messageId: m.id,
+                              mine,
+                              content: m.content,
+                              anchor,
+                              placement: "above",
+                              pos: {
+                                top: clamp(anchor.top - 240, 10, window.innerHeight - 10),
+                                left: clamp(anchor.left + anchor.width / 2 - 140, 10, window.innerWidth - 10)
+                              }
+                            });
+                          }}
+                          className={[
+                            "absolute -bottom-2 z-10 inline-flex items-center gap-1 rounded-full border border-zinc-800 bg-zinc-950/90 px-2 py-0.5 text-[11px] text-zinc-100 shadow-sm",
+                            // Place on inner bottom corner (matches WhatsApp screenshot)
+                            mine ? "left-2" : "right-2"
+                          ].join(" ")}
+                          aria-label="Message reactions"
+                        >
+                          {reactions.slice(0, 3).map((r) => (
+                            <span key={`${m.id}:chip:${r.emoji}`} className={myReaction === r.emoji ? "text-zinc-100" : "text-zinc-200"}>
+                              {r.emoji}
+                            </span>
+                          ))}
+                          <span className="text-zinc-400">
+                            {reactions.reduce((sum, r) => sum + (r.count || 0), 0)}
+                          </span>
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -653,9 +891,9 @@ export function ChatClient({
             }}
             onKeyDown={onComposerKeyDown}
             placeholder="Type a message…"
-            rows={2}
+            rows={1}
             disabled={!canType}
-            className="min-h-[44px] flex-1 resize-none rounded-xl border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-zinc-600"
+            className="h-11 flex-1 resize-none overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-zinc-600"
           />
           <button
             type="button"
@@ -687,6 +925,101 @@ export function ChatClient({
           {connected ? (joined ? "Enter to send • Shift+Enter for newline" : "Joining session…") : "Disconnected — messages are disabled."}
         </div>
       </div>
+
+      {/* WhatsApp-style floating message menu */}
+      {messageMenu ? (
+        <div
+          className="fixed inset-0 z-50"
+          onClick={() => {
+            setSelectedMessageId(null);
+            closeMessageMenu();
+          }}
+        >
+          <div
+            ref={menuRef}
+            className={[
+              "w-[260px] rounded-2xl border border-zinc-800 bg-zinc-950/95 shadow-xl",
+              "transform transition-all duration-150 ease-out",
+              menuOpen ? "opacity-100 scale-100 translate-y-0" : "opacity-0 scale-95 -translate-y-1"
+            ].join(" ")}
+            style={{ position: "fixed", top: messageMenu.pos.top, left: messageMenu.pos.left }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-1 px-2 py-1.5">
+              {["👍", "❤️", "😂", "😮", "😢", "🙏"].map((emoji) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  onClick={() => {
+                    void reactToMessage(messageMenu.messageId, emoji);
+                    setSelectedMessageId(null);
+                    closeMessageMenu();
+                    focusComposer();
+                  }}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-xl text-base hover:bg-zinc-900"
+                  aria-label={`React with ${emoji}`}
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+
+            <div className="h-px bg-zinc-800" />
+
+            <div className="p-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  void copyMessage(messageMenu.content);
+                  setSelectedMessageId(null);
+                  closeMessageMenu();
+                  focusComposer();
+                }}
+                className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-900"
+              >
+                <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950/40 text-zinc-300">
+                  ⧉
+                </span>
+                <span>Copy</span>
+              </button>
+
+              {messageMenu.mine ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!window.confirm("Delete this message?")) return;
+                    void deleteMyMessage(messageMenu.messageId);
+                    setSelectedMessageId(null);
+                    closeMessageMenu();
+                    focusComposer();
+                  }}
+                  className="mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm text-red-200 hover:bg-zinc-900"
+                >
+                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950/40 text-red-200">
+                    <svg
+                      viewBox="0 0 24 24"
+                      className="h-4 w-4"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M3 6h18" />
+                      <path d="M8 6V4h8v2" />
+                      <path d="M19 6l-1 14H6L5 6" />
+                      <path d="M10 11v6" />
+                      <path d="M14 11v6" />
+                    </svg>
+                  </span>
+                  <span>Delete</span>
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
