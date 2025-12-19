@@ -72,7 +72,6 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pendingUserId, setPendingUserId] = useState<string | null>(null);
   const [socket, setSocket] = useState<Socket | null>(null);
-  const [socketOnline, setSocketOnline] = useState(false);
   const [messageSearch, setMessageSearch] = useState("");
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
@@ -216,10 +215,6 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
       s = createClientSocket();
 
-      setSocketOnline(s.connected);
-      s.on("connect", () => setSocketOnline(true));
-      s.on("disconnect", () => setSocketOnline(false));
-
       s.on("user_online", (evt: { userId: string }) => {
         markUserOnline(evt.userId);
       });
@@ -237,7 +232,6 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       cancelled = true;
       if (s) s.disconnect();
       setSocket(null);
-      setSocketOnline(false);
     };
   }, [isChatRoute, markUserOnline, markUserOffline]);
 
@@ -288,9 +282,14 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     <aside className="flex h-full min-h-0 w-full">
       {/* Icon rail (matches Figma left strip) */}
       <div className="flex w-[76px] shrink-0 flex-col items-center border-r border-chat-border bg-chat-surface px-3 py-5">
-        <div className="relative h-11 w-11 overflow-hidden rounded-full">
+        <Link
+          href="/"
+          onClick={() => onNavigate?.()}
+          className="relative h-11 w-11 overflow-hidden rounded-full ring-1 ring-chat-border/60 hover:ring-chat-border"
+          aria-label="Go to homepage"
+        >
           <Image src="/logo.png" alt="Shipper Chat" width={44} height={44} className="h-11 w-11" priority />
-        </div>
+        </Link>
 
         <div className="mt-6 flex flex-col items-center gap-2">
           <Link
