@@ -999,7 +999,7 @@ export function ChatClient({
             placeholder="Type a message…"
             rows={1}
             disabled={!canType}
-            className="h-11 flex-1 resize-none overflow-y-auto rounded-chat-lg border border-chat-border bg-chat-surface px-4 py-3 text-sm text-chat-text outline-none placeholder:text-chat-muted/70 focus:border-chat-primary focus:ring-2 focus:ring-chat-ring/20"
+            className="h-11 flex-1 resize-none overflow-hidden rounded-chat-lg border border-chat-border bg-chat-surface px-4 py-3 text-sm text-chat-text outline-none placeholder:text-chat-muted/70 focus:border-chat-primary focus:ring-2 focus:ring-chat-ring/20"
           />
           <button
             type="button"
