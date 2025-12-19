@@ -15,6 +15,23 @@ import { IconFilter, IconHome, IconMessage, IconSearch, IconStar, IconUser } fro
 type User = { id: string; name: string | null; email: string; image: string | null };
 type OnlineUser = { userId: string; email: string };
 
+function UnreadPill({ count }: { count: number }) {
+  const label = count >= 4 ? "4+" : String(count);
+  return (
+    <div
+      className="flex h-12 w-14 items-center justify-center rounded-[14px] bg-chat-primary text-chat-primary-foreground"
+      aria-label={`${label} unread messages`}
+    >
+      <div className="relative">
+        <IconMessage className="h-4 w-4" />
+        <span className="absolute -right-3 -top-2 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-chat-primary-foreground px-1 text-[10px] font-semibold leading-none text-chat-primary">
+          {label}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function Avatar({ user }: { user: User }) {
   const label = user.name?.trim() || user.email;
   const src = user.image || "/avatar-placeholder.svg";
@@ -37,16 +54,17 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { unreadByUserId, incrementUnread, clearUnread } = useChatShell();
+  const { unreadByUserId, incrementUnread, clearUnread, onlineUserIds, setOnlineUsers, markUserOnline, markUserOffline } =
+    useChatShell();
 
   const activeUserId = searchParams?.get("user") ?? "";
 
   const [users, setUsers] = useState<User[]>([]);
-  const [online, setOnline] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pendingUserId, setPendingUserId] = useState<string | null>(null);
   const [socket, setSocket] = useState<Socket | null>(null);
+  const [socketOnline, setSocketOnline] = useState(false);
   const [messageSearch, setMessageSearch] = useState("");
 
   const isChatRoute = useMemo(() => (pathname ?? "").startsWith("/chat"), [pathname]);
@@ -79,7 +97,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
         if (!mounted) return;
         setUsers(usersJson.users ?? []);
-        setOnline(new Set((onlineJson.onlineUsers ?? []).map((u) => u.userId)));
+        setOnlineUsers((onlineJson.onlineUsers ?? []).map((u) => u.userId));
       } catch {
         if (!mounted) return;
         setLoadError("Couldn't load users. Please retry.");
@@ -92,7 +110,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     return () => {
       mounted = false;
     };
-  }, [isChatRoute]);
+  }, [isChatRoute, setOnlineUsers]);
 
   useEffect(() => {
     if (!isChatRoute) return;
@@ -106,20 +124,16 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
       s = createClientSocket();
 
+      setSocketOnline(s.connected);
+      s.on("connect", () => setSocketOnline(true));
+      s.on("disconnect", () => setSocketOnline(false));
+
       s.on("user_online", (evt: { userId: string }) => {
-        setOnline((prev) => {
-          const next = new Set(prev);
-          next.add(evt.userId);
-          return next;
-        });
+        markUserOnline(evt.userId);
       });
 
       s.on("user_offline", (evt: { userId: string }) => {
-        setOnline((prev) => {
-          const next = new Set(prev);
-          next.delete(evt.userId);
-          return next;
-        });
+        markUserOffline(evt.userId);
       });
 
       setSocket(s);
@@ -131,8 +145,9 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       cancelled = true;
       if (s) s.disconnect();
       setSocket(null);
+      setSocketOnline(false);
     };
-  }, [isChatRoute]);
+  }, [isChatRoute, markUserOnline, markUserOffline]);
 
   async function openChat(userId: string) {
     setPendingUserId(userId);
@@ -165,6 +180,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       });
       const data = (await res.json().catch(() => null)) as { sessionId?: string } | null;
       if (!res.ok || !data?.sessionId) return;
+      registerChatSession("ai", data.sessionId);
       router.push(`/chat/${data.sessionId}?user=ai`);
       onNavigate?.();
     } finally {
@@ -244,7 +260,16 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
               <div className="text-[18px] font-semibold leading-tight tracking-[-0.01em] text-chat-text">
                 Message
               </div>
-              <div className="mt-1 text-xs text-chat-muted">{socket ? "Live" : "Offline"}</div>
+              <div className="mt-1 flex items-center gap-2 text-xs text-chat-muted">
+                <span
+                  className={[
+                    "h-2 w-2 rounded-full",
+                    socketOnline ? "bg-chat-primary" : "bg-chat-border"
+                  ].join(" ")}
+                  aria-hidden="true"
+                />
+                <span>{socketOnline ? "Online" : "Offline"}</span>
+              </div>
             </div>
 
             {pendingUserId ? (
@@ -288,6 +313,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                   : "border-transparent hover:border-chat-border hover:bg-chat-bg/60"
               ].join(" ")}
             >
+              {activeUserId !== "ai" && (unreadByUserId["ai"] ?? 0) > 0 ? <UnreadPill count={unreadByUserId["ai"] ?? 0} /> : null}
               <div className="relative">
                 <div className="flex h-11 w-11 items-center justify-center rounded-full bg-chat-primary text-xs font-semibold text-chat-primary-foreground">
                   AI
@@ -322,7 +348,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           ) : (
             <ul className="space-y-1.5">
               {users.map((u) => {
-                const isOnline = online.has(u.id);
+                const isOnline = onlineUserIds.has(u.id);
                 const isActive = activeUserId === u.id;
                 const unread = unreadByUserId[u.id] ?? 0;
                 const showUnread = !isActive && unread > 0;
@@ -341,6 +367,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                             : "border-transparent hover:border-chat-border hover:bg-chat-bg/60"
                       ].join(" ")}
                     >
+                      {showUnread ? <UnreadPill count={unread} /> : null}
                       <div className="relative">
                         <div className="h-11 w-11">
                           <Avatar user={u} />
@@ -357,19 +384,9 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                         <div className="truncate text-sm font-semibold text-chat-text">{u.name || u.email}</div>
                         <div className="truncate text-xs text-chat-muted">{u.email}</div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        {showUnread ? (
-                          <span
-                            className="inline-flex h-6 min-w-[24px] items-center justify-center rounded-full bg-chat-primary px-2 text-[11px] font-semibold text-chat-primary-foreground"
-                            aria-label={`${unread} unread messages`}
-                          >
-                            {unread > 99 ? "99+" : unread}
-                          </span>
-                        ) : null}
-                        {pendingUserId === u.id ? (
-                          <div className="h-4 w-4 animate-spin rounded-full border-2 border-chat-border border-t-chat-primary" />
-                        ) : null}
-                      </div>
+                      {pendingUserId === u.id ? (
+                        <div className="h-4 w-4 animate-spin rounded-full border-2 border-chat-border border-t-chat-primary" />
+                      ) : null}
                     </button>
                   </li>
                 );

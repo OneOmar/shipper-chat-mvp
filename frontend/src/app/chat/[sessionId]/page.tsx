@@ -36,6 +36,7 @@ export default async function ChatSessionPage({
         meUserId: string;
         sessionId: string;
         participants: Array<{ id: string; name: string | null; email: string; image: string | null }>;
+        lastReadAtByUserId?: Record<string, string>;
         initialMessages: Array<{
           id: string;
           content: string;
@@ -56,6 +57,7 @@ export default async function ChatSessionPage({
       sessionId={data.sessionId}
       participants={data.participants}
       initialMessages={data.initialMessages}
+      lastReadAtByUserId={data.lastReadAtByUserId ?? {}}
     />
   );
 }

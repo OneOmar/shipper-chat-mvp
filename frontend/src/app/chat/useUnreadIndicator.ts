@@ -11,6 +11,7 @@ type ReceiveMessageEvent = {
   sessionId: string;
   createdAt: string;
   sender: { id: string; name: string | null; email: string; image: string | null };
+  peerUserId?: string;
 };
 
 type Params = {
@@ -106,29 +107,48 @@ export function useUnreadIndicator({ socket, activeUserId, incrementUnread, clea
 
   useEffect(() => {
     // Opening a chat should clear its unread count (including back/forward navigation).
-    if (!activeUserId || activeUserId === "ai") return;
+    if (!activeUserId) return;
     clearUnread(activeUserId);
   }, [activeUserId, clearUnread]);
 
   useEffect(() => {
     if (!socket) return;
+
+    const joinAllKnownSessions = () => {
+      for (const sessionId of Object.values(sessionIdByUserId)) {
+        if (!sessionId) continue;
+        socket.emit("join_session", sessionId, () => {});
+      }
+    };
+
     // Join sessions we already know about so we can receive `receive_message` events.
-    for (const sessionId of Object.values(sessionIdByUserId)) {
-      if (!sessionId) continue;
-      socket.emit("join_session", sessionId, () => {});
-    }
+    // Important: on Socket.IO reconnect, server-side room membership is lost, so we must re-join.
+    if (socket.connected) joinAllKnownSessions();
+    socket.on("connect", joinAllKnownSessions);
+
+    return () => {
+      socket.off("connect", joinAllKnownSessions);
+    };
   }, [socket, sessionIdByUserId]);
 
   useEffect(() => {
     if (!socket) return;
 
     const onReceive = (msg: ReceiveMessageEvent) => {
-      const userId = userIdBySessionId[msg.sessionId];
-      if (!userId) return;
-      if (activeUserId === userId) return;
-      // Only count messages that come from the other user for that row.
-      if (msg.senderId !== userId) return;
-      incrementUnread(userId);
+      const key = msg.peerUserId || userIdBySessionId[msg.sessionId] || "";
+      if (!key) return;
+      if (activeUserId === key) return;
+
+      // AI sessions: backend sets peerUserId="ai". Only count assistant replies.
+      if (key === "ai") {
+        if (msg.role !== "assistant") return;
+        incrementUnread("ai");
+        return;
+      }
+
+      // Direct sessions: only count messages from the other user for that row.
+      if (msg.senderId !== key) return;
+      incrementUnread(key);
     };
 
     socket.on("receive_message", onReceive);
