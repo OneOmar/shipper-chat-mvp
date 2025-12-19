@@ -196,7 +196,7 @@ export function ChatShell({ children }: { children: React.ReactNode }) {
         <div className="mx-auto flex w-full max-w-6xl min-h-0 overflow-hidden rounded-chat-xl bg-chat-surface shadow-chat-card ring-1 ring-chat-border/80">
           <div
             className={[
-              "fixed inset-y-0 left-0 z-40 w-[340px] transform bg-chat-surface transition-transform md:static md:z-auto md:w-[340px] md:translate-x-0",
+              "fixed inset-y-0 left-0 z-40 w-[92vw] max-w-[460px] transform bg-chat-surface transition-transform md:static md:z-auto md:w-[460px] md:max-w-none md:translate-x-0",
               mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
             ].join(" ")}
           >

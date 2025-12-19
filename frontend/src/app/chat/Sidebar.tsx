@@ -1,7 +1,7 @@
 "use client";
 
 import type { Socket } from "socket.io-client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -10,10 +10,18 @@ import { LogoutButton } from "./LogoutButton";
 import { useChatShell } from "./ChatShell";
 import { useUnreadIndicator } from "./useUnreadIndicator";
 import { createClientSocket } from "@/lib/socket-client";
-import { IconFilter, IconHome, IconMessage, IconSearch, IconStar, IconUser } from "@/app/_components/icons";
+import { IconEdit, IconFilter, IconHome, IconMessage, IconSearch, IconStar, IconUser } from "@/app/_components/icons";
 
 type User = { id: string; name: string | null; email: string; image: string | null };
 type OnlineUser = { userId: string; email: string };
+type SearchResult = {
+  messageId: string;
+  sessionId: string;
+  createdAt: string;
+  content: string;
+  peerUserId: string;
+  peer: { id: string; name: string | null; email: string; image: string | null } | null;
+};
 
 function UnreadPill({ count }: { count: number }) {
   const label = count >= 4 ? "4+" : String(count);
@@ -66,6 +74,13 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [socketOnline, setSocketOnline] = useState(false);
   const [messageSearch, setMessageSearch] = useState("");
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const searchReqIdRef = useRef(0);
+  const [newMessageOpen, setNewMessageOpen] = useState(false);
+  const [newMessageQuery, setNewMessageQuery] = useState("");
+  const newMessageButtonRef = useRef<HTMLButtonElement | null>(null);
+  const newMessagePopoverRef = useRef<HTMLDivElement | null>(null);
 
   const isChatRoute = useMemo(() => (pathname ?? "").startsWith("/chat"), [pathname]);
 
@@ -75,6 +90,83 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     incrementUnread,
     clearUnread
   });
+
+  const searchQuery = messageSearch.trim();
+  const searchActive = searchQuery.length >= 2;
+
+  useEffect(() => {
+    // Close the New Message popover when navigating to a chat (from anywhere).
+    setNewMessageOpen(false);
+    setNewMessageQuery("");
+  }, [activeUserId]);
+
+  useEffect(() => {
+    if (!newMessageOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setNewMessageOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [newMessageOpen]);
+
+  useEffect(() => {
+    if (!newMessageOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as Node | null;
+      if (!target) return;
+      if (newMessagePopoverRef.current?.contains(target)) return;
+      if (newMessageButtonRef.current?.contains(target)) return;
+      setNewMessageOpen(false);
+      setNewMessageQuery("");
+    };
+    // Capture phase so it still works even if the chat pane stops propagation.
+    window.addEventListener("pointerdown", onPointerDown, true);
+    return () => window.removeEventListener("pointerdown", onPointerDown, true);
+  }, [newMessageOpen]);
+
+  useEffect(() => {
+    if (!isChatRoute) return;
+    if (!searchActive) {
+      setSearchResults([]);
+      setSearchLoading(false);
+      return;
+    }
+
+    const reqId = ++searchReqIdRef.current;
+    setSearchLoading(true);
+    const t = window.setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/chat/search?q=${encodeURIComponent(searchQuery)}&limit=20`, {
+          credentials: "include"
+        });
+        const json = (await res.json().catch(() => null)) as { results?: SearchResult[] } | null;
+        if (searchReqIdRef.current !== reqId) return;
+        setSearchResults(Array.isArray(json?.results) ? json!.results! : []);
+      } catch {
+        if (searchReqIdRef.current !== reqId) return;
+        setSearchResults([]);
+      } finally {
+        if (searchReqIdRef.current === reqId) setSearchLoading(false);
+      }
+    }, 200);
+
+    return () => window.clearTimeout(t);
+  }, [isChatRoute, searchActive, searchQuery]);
+
+  const filteredUsers = useMemo(() => {
+    if (!searchActive) return users;
+    return users;
+  }, [users, searchActive]);
+
+  const newMessageUsers = useMemo(() => {
+    const q = newMessageQuery.trim().toLowerCase();
+    if (!q) return users;
+    return users.filter((u) => {
+      const name = (u.name ?? "").toLowerCase();
+      const email = (u.email ?? "").toLowerCase();
+      return name.includes(q) || email.includes(q);
+    });
+  }, [users, newMessageQuery]);
 
   useEffect(() => {
     if (!isChatRoute) return;
@@ -150,6 +242,8 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   }, [isChatRoute, markUserOnline, markUserOffline]);
 
   async function openChat(userId: string) {
+    setNewMessageOpen(false);
+    setNewMessageQuery("");
     setPendingUserId(userId);
     try {
       const res = await fetch("/api/chat/session", {
@@ -172,6 +266,8 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   }
 
   async function openAiChat() {
+    setNewMessageOpen(false);
+    setNewMessageQuery("");
     setPendingUserId("ai");
     try {
       const res = await fetch("/api/chat/ai-session", {
@@ -257,24 +353,88 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         <div className="border-b border-chat-border px-5 py-5">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <div className="text-[18px] font-semibold leading-tight tracking-[-0.01em] text-chat-text">
-                Message
+              <div className="text-[20px] font-semibold leading-tight tracking-[-0.02em] text-chat-text">
+                All Message
               </div>
-              <div className="mt-1 flex items-center gap-2 text-xs text-chat-muted">
-                <span
-                  className={[
-                    "h-2 w-2 rounded-full",
-                    socketOnline ? "bg-chat-primary" : "bg-chat-border"
-                  ].join(" ")}
-                  aria-hidden="true"
-                />
-                <span>{socketOnline ? "Online" : "Offline"}</span>
-              </div>
+              {/* Status hidden to match reference */}
             </div>
 
-            {pendingUserId ? (
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-chat-border border-t-chat-primary" aria-label="Loading" />
-            ) : null}
+            <div className="relative flex items-center gap-2">
+              <button
+                type="button"
+                ref={newMessageButtonRef}
+                onClick={() => {
+                  setNewMessageOpen((v) => !v);
+                  setNewMessageQuery("");
+                }}
+                className="inline-flex h-10 items-center gap-2 rounded-full bg-chat-primary px-4 text-sm font-semibold text-chat-primary-foreground shadow-sm hover:brightness-[0.98]"
+                aria-haspopup="dialog"
+                aria-expanded={newMessageOpen}
+              >
+                <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-chat-primary-foreground/15">
+                  <IconEdit className="h-4 w-4" />
+                </span>
+                New Message
+              </button>
+
+              {pendingUserId ? (
+                <div
+                  className="h-4 w-4 animate-spin rounded-full border-2 border-chat-border border-t-chat-primary"
+                  aria-label="Loading"
+                />
+              ) : null}
+
+              {newMessageOpen ? (
+                <>
+                  <div
+                    ref={newMessagePopoverRef}
+                    className="absolute right-0 top-12 z-50 w-[320px] rounded-chat-xl border border-chat-border bg-chat-surface p-3 shadow-chat-card ring-1 ring-chat-border/60"
+                  >
+                    <div className="px-1 pb-2">
+                      <div className="text-sm font-semibold text-chat-text">New Message</div>
+                    </div>
+                    <div className="relative px-1">
+                      <IconSearch className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-chat-muted" />
+                      <input
+                        value={newMessageQuery}
+                        onChange={(e) => setNewMessageQuery(e.target.value)}
+                        autoFocus
+                        placeholder="Search name or email"
+                        className="h-11 w-full rounded-chat-lg border border-chat-border bg-chat-surface px-10 pr-3 text-sm text-chat-text placeholder:text-chat-muted/70 outline-none focus:border-chat-primary focus:ring-2 focus:ring-chat-ring/20"
+                      />
+                    </div>
+                    <div className="mt-2 max-h-[360px] overflow-auto px-1">
+                      {newMessageUsers.length === 0 ? (
+                        <div className="px-2 py-3 text-sm text-chat-muted">No users found.</div>
+                      ) : (
+                        <ul className="space-y-1">
+                          {newMessageUsers.map((u) => (
+                            <li key={`new:${u.id}`}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setNewMessageOpen(false);
+                                  void openChat(u.id);
+                                }}
+                                className="flex w-full items-center gap-3 rounded-chat-lg px-2.5 py-2 text-left hover:bg-chat-bg"
+                              >
+                                <div className="h-9 w-9 shrink-0 overflow-hidden rounded-full">
+                                  <Avatar user={u} />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <div className="truncate text-sm font-semibold text-chat-text">{u.name || u.email}</div>
+                                  <div className="truncate text-xs text-chat-muted">{u.email}</div>
+                                </div>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
+                </>
+              ) : null}
+            </div>
           </div>
 
           {/* Search in message (visual-only; no filtering behavior) */}
@@ -300,6 +460,74 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         </div>
 
         <div className="flex-1 overflow-auto p-3">
+          {searchActive ? (
+            <div className="mb-3">
+              <div className="px-2 pb-2 text-xs font-medium text-chat-muted">Results</div>
+              {searchLoading ? (
+                <div className="px-2 py-2 text-sm text-chat-muted">Searching…</div>
+              ) : searchResults.length === 0 ? (
+                <div className="px-2 py-2 text-sm text-chat-muted">No results.</div>
+              ) : (
+                <ul className="space-y-1.5">
+                  {searchResults.map((r) => {
+                    const peerLabel = r.peer?.name?.trim() || r.peer?.email || (r.peerUserId === "ai" ? "Chat with AI" : "Unknown");
+                    const snippet = (r.content || "").replace(/\s+/g, " ").trim();
+                    const short = snippet.length > 90 ? `${snippet.slice(0, 90)}…` : snippet;
+                    const when = (() => {
+                      const d = new Date(r.createdAt);
+                      if (!Number.isFinite(d.getTime())) return "";
+                      try {
+                        return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+                      } catch {
+                        return "";
+                      }
+                    })();
+
+                    return (
+                      <li key={`${r.sessionId}:${r.messageId}`}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            // Make sure session mapping exists for unread logic.
+                            registerChatSession(r.peerUserId || "ai", r.sessionId);
+                            clearUnread(r.peerUserId);
+                            router.push(
+                              `/chat/${encodeURIComponent(r.sessionId)}?user=${encodeURIComponent(r.peerUserId || "ai")}&msg=${encodeURIComponent(r.messageId)}&q=${encodeURIComponent(searchQuery)}`
+                            );
+                            onNavigate?.();
+                            setMessageSearch("");
+                          }}
+                          className="flex w-full items-start gap-3 rounded-chat-lg border border-chat-border bg-chat-surface px-3.5 py-3 text-left hover:bg-chat-bg"
+                        >
+                          <div className="relative mt-0.5 h-9 w-9 shrink-0 overflow-hidden rounded-full">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={r.peer?.image || "/avatar-placeholder.svg"}
+                              alt={peerLabel}
+                              className="h-9 w-9 rounded-full object-cover"
+                              onError={(e) => {
+                                const el = e.currentTarget;
+                                if (el.src.endsWith("/avatar-placeholder.svg")) return;
+                                el.src = "/avatar-placeholder.svg";
+                              }}
+                            />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="truncate text-sm font-semibold text-chat-text">{peerLabel}</div>
+                              <div className="shrink-0 text-[11px] text-chat-muted">{when}</div>
+                            </div>
+                            <div className="mt-0.5 line-clamp-2 text-xs text-chat-muted">{short}</div>
+                          </div>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          ) : null}
+
           {/* AI entry */}
           <div className="mb-2">
             <button
@@ -347,7 +575,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
             <div className="px-3 py-2 text-sm text-chat-muted">No users found.</div>
           ) : (
             <ul className="space-y-1.5">
-              {users.map((u) => {
+              {filteredUsers.map((u) => {
                 const isOnline = onlineUserIds.has(u.id);
                 const isActive = activeUserId === u.id;
                 const unread = unreadByUserId[u.id] ?? 0;

@@ -13,11 +13,16 @@ function getRequestOrigin(h: Headers) {
 }
 
 export default async function ChatSessionPage({
-  params
+  params,
+  searchParams
 }: {
   params: Promise<{ sessionId: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { sessionId } = await params;
+  const sp = (await searchParams) ?? {};
+  const focusMessageId = typeof sp.msg === "string" ? sp.msg : Array.isArray(sp.msg) ? sp.msg[0] : "";
+  const focusQuery = typeof sp.q === "string" ? sp.q : Array.isArray(sp.q) ? sp.q[0] : "";
 
   const cookieStore = await cookies();
   const cookieHeader = cookieStore.toString();
@@ -58,6 +63,8 @@ export default async function ChatSessionPage({
       participants={data.participants}
       initialMessages={data.initialMessages}
       lastReadAtByUserId={data.lastReadAtByUserId ?? {}}
+      initialFocusMessageId={focusMessageId}
+      initialSearchQuery={focusQuery}
     />
   );
 }
