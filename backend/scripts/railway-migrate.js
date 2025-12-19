@@ -5,8 +5,9 @@
   Specifically handles: 20251219000000_add_participant_last_read_at
 
   Strategy:
-  - If Participant.lastReadAt exists: mark migration as applied.
-  - Else: mark migration as rolled-back (so it can be reapplied), then run migrate deploy.
+  - Always clear the failed migration state by resolving it as rolled-back (idempotent).
+  - The migration SQL is written with IF NOT EXISTS, so re-applying is safe.
+  - Then run migrate deploy to apply any pending migrations.
 
   This is intentionally narrow and safe for production.
 */
@@ -20,34 +21,23 @@ function sh(cmd) {
   execSync(cmd, { stdio: "inherit" });
 }
 
-async function main() {
-  // Lazy require so this file can run even if Prisma client isn't generated yet.
-  const { PrismaClient } = require("@prisma/client");
-  const prisma = new PrismaClient();
-
+function trySh(cmd) {
   try {
-    // Confirm we can connect.
-    await prisma.$queryRawUnsafe("SELECT 1");
-
-    const rows = await prisma.$queryRawUnsafe(
-      "SELECT column_name FROM information_schema.columns WHERE table_name = 'Participant' AND column_name = 'lastReadAt'"
-    );
-
-    const hasColumn = Array.isArray(rows) && rows.length > 0;
-
-    if (hasColumn) {
-      console.log(`Detected Participant.lastReadAt exists; resolving migration as applied: ${MIGRATION}`);
-      sh(`npx prisma migrate resolve --applied ${MIGRATION}`);
-    } else {
-      console.log(`Participant.lastReadAt not found; resolving migration as rolled-back: ${MIGRATION}`);
-      sh(`npx prisma migrate resolve --rolled-back ${MIGRATION}`);
-    }
-
-    // Now apply any pending migrations.
-    sh("npx prisma migrate deploy");
-  } finally {
-    await prisma.$disconnect().catch(() => {});
+    sh(cmd);
+    return true;
+  } catch (e) {
+    console.warn(`Command failed (continuing): ${cmd}`);
+    return false;
   }
+}
+
+async function main() {
+  console.log(`Ensuring failed migration is cleared: ${MIGRATION}`);
+  // Mark as rolled back to unblock P3009. If it's already resolved, Prisma will error—ignore.
+  trySh(`npx prisma migrate resolve --rolled-back ${MIGRATION}`);
+
+  // Now apply any pending migrations (including re-applying the above safely).
+  sh("npx prisma migrate deploy");
 }
 
 main().catch((err) => {
