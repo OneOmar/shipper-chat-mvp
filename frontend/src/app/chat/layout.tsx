@@ -14,7 +14,7 @@ export default async function ChatLayout({ children }: { children: ReactNode }) 
   if (!ok) redirect("/login");
 
   return (
-    <div className="h-screen bg-zinc-950 text-zinc-100">
+    <div className="chat-theme h-screen bg-chat-bg text-chat-text">
       <ChatShell>{children}</ChatShell>
     </div>
   );

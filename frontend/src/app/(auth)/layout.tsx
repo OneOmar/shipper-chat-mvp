@@ -2,10 +2,14 @@ import type { ReactNode } from "react";
 
 export default function AuthLayout({ children }: { children: ReactNode }) {
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      <div className="mx-auto flex min-h-screen w-full max-w-md flex-col justify-center px-6 py-12">
-        <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-6 shadow-sm">
+    <div className="chat-theme h-[100dvh] overflow-hidden bg-chat-bg text-chat-text">
+      <div className="mx-auto flex h-[100dvh] w-full max-w-md flex-col justify-center px-4 sm:px-6">
+        <div className="rounded-chat-xl border border-chat-border bg-chat-surface p-6 shadow-chat-card ring-1 ring-chat-border/60 sm:p-7">
           {children}
+        </div>
+
+        <div className="mt-4 text-center text-xs text-chat-muted">
+          By continuing, you agree to our terms and privacy policy.
         </div>
       </div>
     </div>

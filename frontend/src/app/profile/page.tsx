@@ -6,22 +6,22 @@ export const runtime = "nodejs";
 
 export default function ProfilePage() {
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      <div className="mx-auto w-full max-w-2xl px-6 py-10">
+    <div className="chat-theme min-h-screen bg-chat-bg text-chat-text">
+      <div className="mx-auto w-full max-w-3xl px-6 py-10">
         <div className="mb-6 flex items-center justify-between">
           <div>
-            <div className="text-lg font-semibold">Profile</div>
-            <div className="text-sm text-zinc-500">Edit your public profile details.</div>
+            <div className="text-[18px] font-semibold leading-tight tracking-[-0.01em] text-chat-text">Profile</div>
+            <div className="text-sm text-chat-muted">Edit your public profile details.</div>
           </div>
           <Link
             href="/chat"
-            className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-900"
+            className="rounded-chat-lg border border-chat-border bg-chat-surface px-3 py-2 text-xs font-medium text-chat-text/90 hover:bg-chat-bg"
           >
             Back to chat
           </Link>
         </div>
 
-        <div className="rounded-2xl border border-zinc-800 bg-zinc-900/30 p-6">
+        <div className="rounded-chat-xl border border-chat-border bg-chat-surface p-6 shadow-chat-card">
           <ProfileClient />
         </div>
       </div>

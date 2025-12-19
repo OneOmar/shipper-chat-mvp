@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { Socket } from "socket.io-client";
 import { useChatShell } from "../ChatShell";
 import { createClientSocket } from "@/lib/socket-client";
+import { IconChevronDown, IconCopy, IconMenu, IconSend, IconSmile, IconTrash } from "@/app/_components/icons";
 
 type User = { id: string; name: string | null; email: string; image: string | null };
 
@@ -24,7 +25,7 @@ type AiMessageDeltaEvent = { tempId: string; sessionId: string; delta: string; c
 type AiMessageDoneEvent = { tempId: string; sessionId: string; message: Message };
 
 type TypingEvent = { sessionId: string; userId: string };
-type MessagesReadUpdateEvent = { sessionId: string; readerId: string; messageIds: string[] };
+type MessagesReadUpdateEvent = { sessionId: string; readerId: string; messageIds: string[]; readAt?: string };
 type MessageDeletedEvent = { sessionId: string; messageId: string; deletedBy: string };
 type MessageReactionsEvent = { sessionId: string; messageId: string; reactions: Array<{ emoji: string; count: number }> };
 
@@ -36,10 +37,36 @@ function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
+function startOfLocalDayMs(d: Date) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x.getTime();
+}
+
+function dateSeparatorLabel(iso: string) {
+  const d = new Date(iso);
+  const t = d.getTime();
+  if (!Number.isFinite(t)) return "";
+
+  const now = new Date();
+  const todayStart = startOfLocalDayMs(now);
+  const dayStart = startOfLocalDayMs(d);
+  const diffDays = Math.round((todayStart - dayStart) / (24 * 60 * 60 * 1000));
+
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+
+  try {
+    return d.toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" });
+  } catch {
+    return "";
+  }
+}
+
 function MiniAvatar({ sender }: { sender: User }) {
   if (isAi(sender)) {
     return (
-      <div className="flex h-7 w-7 items-center justify-center rounded-full bg-indigo-600 text-[10px] font-semibold text-white">
+      <div className="flex h-7 w-7 items-center justify-center rounded-full bg-chat-primary text-[10px] font-semibold text-chat-primary-foreground">
         AI
       </div>
     );
@@ -65,14 +92,16 @@ export function ChatClient({
   meUserId,
   sessionId,
   participants,
-  initialMessages
+  initialMessages,
+  lastReadAtByUserId
 }: {
   meUserId: string;
   sessionId: string;
   participants: User[];
   initialMessages: Message[];
+  lastReadAtByUserId: Record<string, string>;
 }) {
-  const { openSidebar } = useChatShell();
+  const { openSidebar, onlineUserIds } = useChatShell();
   const [socket, setSocket] = useState<Socket | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const [messages, setMessages] = useState<Message[]>(initialMessages);
@@ -107,8 +136,8 @@ export function ChatClient({
     pos: { top: number; left: number };
   }>(null);
 
-  // Read receipts (frontend-only)
-  const [readByOtherIds, setReadByOtherIds] = useState<Set<string>>(new Set());
+  // Read receipts (persisted via participant.lastReadAt on backend)
+  const [otherLastReadAt, setOtherLastReadAt] = useState<Date | null>(null);
   const sentReadIdsRef = useRef<Set<string>>(new Set());
 
   const title = useMemo(() => {
@@ -118,6 +147,25 @@ export function ChatClient({
 
   const otherUser = useMemo(() => participants.find((p) => p.id !== meUserId) ?? null, [participants, meUserId]);
   const canViewProfile = !!otherUser && !isAi(otherUser);
+  const otherUserOnline = useMemo(() => {
+    if (!otherUser) return false;
+    if (isAi(otherUser)) return true;
+    return onlineUserIds.has(otherUser.id);
+  }, [otherUser, onlineUserIds]);
+
+  useEffect(() => {
+    if (!otherUser || isAi(otherUser)) {
+      setOtherLastReadAt(null);
+      return;
+    }
+    const iso = lastReadAtByUserId?.[otherUser.id] ?? "";
+    if (!iso) {
+      setOtherLastReadAt(null);
+      return;
+    }
+    const d = new Date(iso);
+    setOtherLastReadAt(Number.isFinite(d.getTime()) ? d : null);
+  }, [otherUser, lastReadAtByUserId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -223,12 +271,6 @@ export function ChatClient({
         if (!(evt.messageId in prev)) return prev;
         const next = { ...prev };
         delete next[evt.messageId];
-        return next;
-      });
-      setReadByOtherIds((prev) => {
-        if (!prev.has(evt.messageId)) return prev;
-        const next = new Set(prev);
-        next.delete(evt.messageId);
         return next;
       });
       sentReadIdsRef.current.delete(evt.messageId);
@@ -374,11 +416,12 @@ export function ChatClient({
       s.on("messages:read:update", (evt: MessagesReadUpdateEvent) => {
         if (evt.sessionId !== sessionId) return;
         if (evt.readerId === meUserId) return;
-        setReadByOtherIds((prev) => {
-          const next = new Set(prev);
-          for (const id of evt.messageIds) next.add(id);
-          return next;
-        });
+        if (evt.readAt) {
+          const d = new Date(evt.readAt);
+          if (Number.isFinite(d.getTime())) setOtherLastReadAt(d);
+        } else {
+          setOtherLastReadAt(new Date());
+        }
       });
 
       s.on("message_deleted", handleMessageDeleted);
@@ -426,7 +469,6 @@ export function ChatClient({
   useEffect(() => {
     // Reset ephemeral state when switching chats.
     sentReadIdsRef.current = new Set();
-    setReadByOtherIds(new Set());
     setTypingUserIds(new Set());
     isTypingRef.current = false;
     setSelectedMessageId(null);
@@ -601,42 +643,69 @@ export function ChatClient({
     return `${name} is typing…`;
   }, [typingUserIds, participants]);
 
+  function formatReadTime(d: Date) {
+    try {
+      return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    } catch {
+      return "";
+    }
+  }
+
+  function formatMessageTime(iso: string) {
+    const d = new Date(iso);
+    if (!Number.isFinite(d.getTime())) return "";
+    try {
+      return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    } catch {
+      return "";
+    }
+  }
+
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="border-b border-zinc-800 px-6 py-4">
+    <div className="flex h-full min-h-0 flex-col bg-chat-bg/40">
+      <div className="border-b border-chat-border bg-chat-surface px-6 py-5">
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
             <button
               type="button"
-              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900/40 text-zinc-200 hover:bg-zinc-900 md:hidden"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-chat-lg border border-chat-border bg-chat-surface text-chat-text/80 hover:bg-chat-bg md:hidden"
               onClick={openSidebar}
               aria-label="Open sidebar"
             >
-              <span className="text-lg leading-none">≡</span>
+              <IconMenu className="h-5 w-5" />
             </button>
             <div className="min-w-0">
-              <div className="truncate text-sm font-semibold text-zinc-100">{title}</div>
+              <div className="truncate text-[18px] font-semibold leading-tight tracking-[-0.01em] text-chat-text">
+                {title}
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-3">
             {canViewProfile ? (
               <Link
                 href={`/users/${encodeURIComponent(otherUser.id)}`}
-                className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-900"
+                className="rounded-chat-lg border border-chat-border bg-chat-surface px-3 py-2 text-xs font-medium text-chat-text/90 hover:bg-chat-bg"
               >
                 View profile
               </Link>
             ) : null}
-            <div className="flex items-center gap-2 text-xs text-zinc-500">
-            <span className={["h-2 w-2 rounded-full", connected ? "bg-emerald-500" : "bg-zinc-600"].join(" ")} />
-            <span>{connected ? (joined ? "Connected" : "Joining…") : "Disconnected"}</span>
+            <div className="flex items-center gap-2 rounded-full border border-chat-border bg-chat-surface px-3 py-2 text-xs text-chat-muted">
+              <span
+                className={[
+                  "h-2 w-2 rounded-full",
+                  otherUserOnline ? "bg-chat-primary" : "bg-chat-border"
+                ].join(" ")}
+              />
+              <span className="whitespace-nowrap">
+                {otherUserOnline ? "Online" : "Offline"}
+              </span>
             </div>
           </div>
         </div>
       </div>
 
       <div
-        className="flex min-h-0 flex-1 flex-col overflow-auto px-6 py-4"
+        className="flex min-h-0 flex-1 flex-col overflow-auto px-6 py-6"
         onClick={() => {
           setSelectedMessageId(null);
           closeMessageMenu();
@@ -644,123 +713,90 @@ export function ChatClient({
       >
         {messages.length === 0 ? (
           <div className="flex flex-1 items-center justify-center">
-            <div className="max-w-sm rounded-2xl border border-zinc-800 bg-zinc-900/30 px-4 py-3 text-center">
-              <div className="text-sm font-medium text-zinc-100">No messages yet</div>
-              <div className="mt-1 text-sm text-zinc-400">Send a message to start the conversation.</div>
+            <div className="max-w-sm rounded-chat-xl border border-chat-border bg-chat-surface px-5 py-4 text-center shadow-chat-card">
+              <div className="text-sm font-semibold text-chat-text">No messages yet</div>
+              <div className="mt-1 text-sm text-chat-muted">Send a message to start the conversation.</div>
             </div>
           </div>
         ) : (
-          <div className="space-y-3">
-            {messages.map((m) => {
+          <div className="space-y-2.5">
+            {messages.map((m, idx) => {
               const mine = m.senderId === meUserId;
-              const showRead = mine && !!otherUser && readByOtherIds.has(m.id);
+              const createdAtMs = new Date(m.createdAt).getTime();
+              const isRead =
+                mine &&
+                !!otherUser &&
+                !!otherLastReadAt &&
+                Number.isFinite(createdAtMs) &&
+                createdAtMs <= otherLastReadAt.getTime();
               const isPersisted = !m.id.startsWith("temp:");
               const isSelected = selectedMessageId === m.id;
               const reactions = m.reactions ?? [];
               const myReaction = myReactionByMessageId[m.id] ?? null;
+              const timeLabel = formatMessageTime(m.createdAt);
+
+              const prev = idx > 0 ? messages[idx - 1] : null;
+              const prevDayStart = prev ? startOfLocalDayMs(new Date(prev.createdAt)) : null;
+              const dayStart = startOfLocalDayMs(new Date(m.createdAt));
+              const showDateSeparator = idx === 0 || prevDayStart !== dayStart;
+              const separator = showDateSeparator ? dateSeparatorLabel(m.createdAt) : "";
               return (
-                <div key={m.id} className={mine ? "flex justify-end" : "flex justify-start"}>
-                  <div
-                    className={["flex max-w-[90%] items-end gap-2", mine ? "justify-end" : "justify-start"].join(" ")}
-                  >
-                    {mine ? null : <MiniAvatar sender={m.sender} />}
-                    <div className="relative group">
-                      {/* Hover / desktop trigger (WhatsApp-style) */}
-                      {isPersisted ? (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                            const anchor = {
-                              top: r.top,
-                              left: r.left,
-                              right: r.right,
-                              bottom: r.bottom,
-                              width: r.width,
-                              height: r.height
-                            };
-                            setSelectedMessageId(m.id);
-                            setMessageMenu({
-                              messageId: m.id,
-                              mine,
-                              content: m.content,
-                              anchor,
-                              placement: "above",
-                              pos: {
-                                top: clamp(anchor.top - 240, 10, window.innerHeight - 10),
-                                left: clamp(anchor.left + anchor.width / 2 - 140, 10, window.innerWidth - 10)
-                              }
-                            });
-                          }}
-                          aria-label="Message menu"
-                          className={[
-                            "hidden md:inline-flex absolute top-1 z-10 h-6 w-6 items-center justify-center rounded-full border border-zinc-800 bg-zinc-950/80 text-xs text-zinc-200 shadow-sm",
-                            "opacity-0 transition-opacity group-hover:opacity-100",
-                            // Place on inner top corner
-                            mine ? "left-1" : "right-1"
-                          ].join(" ")}
-                        >
-                          <span aria-hidden="true" className="text-base leading-none">
-                            ˅
-                          </span>
-                        </button>
-                      ) : null}
-
-                      <div
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (!isPersisted) return;
-                          const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                          const anchor = {
-                            top: r.top,
-                            left: r.left,
-                            right: r.right,
-                            bottom: r.bottom,
-                            width: r.width,
-                            height: r.height
-                          };
-                          setSelectedMessageId(m.id);
-                          setMessageMenu({
-                            messageId: m.id,
-                            mine,
-                            content: m.content,
-                            anchor,
-                            placement: "above",
-                            pos: {
-                              top: clamp(anchor.top - 240, 10, window.innerHeight - 10),
-                              left: clamp(anchor.left + anchor.width / 2 - 140, 10, window.innerWidth - 10)
-                            }
-                          });
-                        }}
-                        className={[
-                          "rounded-2xl px-3 py-2 text-sm",
-                          isPersisted && isSelected ? "ring-2 ring-zinc-400/40" : "",
-                          mine
-                            ? "bg-zinc-100 text-zinc-900"
-                            : isAi(m.sender)
-                              ? "bg-indigo-950/40 text-zinc-100 border border-indigo-900/50"
-                              : "bg-zinc-900/60 text-zinc-100 border border-zinc-800"
-                        ].join(" ")}
-                      >
-                        <div className="whitespace-pre-wrap break-words">{m.content}</div>
-
-                        <div className={["mt-1 flex items-center justify-between gap-2 text-[11px]", mine ? "text-zinc-600" : "text-zinc-400"].join(" ")}>
-                          {mine ? (
-                            <span className="inline-flex items-center gap-1">
-                              <span>You</span>
-                              {showRead ? <span aria-label="Read receipt">✓✓</span> : null}
-                            </span>
-                          ) : (
-                            m.sender.name || m.sender.email
-                          )}
-                        </div>
+                <Fragment key={m.id}>
+                  {showDateSeparator && separator ? (
+                    <div className="flex justify-center py-2">
+                      <div className="rounded-full border border-chat-border bg-chat-surface px-3 py-1 text-[12px] font-medium text-chat-muted shadow-sm">
+                        {separator}
                       </div>
+                    </div>
+                  ) : null}
 
-                      {/* Reactions chip (WhatsApp-like placement: hugs the bubble) */}
-                      {reactions.length ? (
-                        <button
-                          type="button"
+                  <div className={mine ? "flex justify-end" : "flex justify-start"}>
+                    <div
+                      className={["flex max-w-[90%] items-end gap-2", mine ? "justify-end" : "justify-start"].join(" ")}
+                    >
+                      {mine ? null : <MiniAvatar sender={m.sender} />}
+                      <div className="relative group">
+                        {/* Hover / desktop trigger (WhatsApp-style) */}
+                        {isPersisted ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                              const anchor = {
+                                top: r.top,
+                                left: r.left,
+                                right: r.right,
+                                bottom: r.bottom,
+                                width: r.width,
+                                height: r.height
+                              };
+                              setSelectedMessageId(m.id);
+                              setMessageMenu({
+                                messageId: m.id,
+                                mine,
+                                content: m.content,
+                                anchor,
+                                placement: "above",
+                                pos: {
+                                  top: clamp(anchor.top - 240, 10, window.innerHeight - 10),
+                                  left: clamp(anchor.left + anchor.width / 2 - 140, 10, window.innerWidth - 10)
+                                }
+                              });
+                            }}
+                            aria-label="Message menu"
+                            className={[
+                              "hidden md:inline-flex absolute top-1 z-10 h-7 w-7 items-center justify-center rounded-full border border-chat-border bg-chat-surface text-xs text-chat-text/70 shadow-sm",
+                              "opacity-0 transition-opacity group-hover:opacity-100",
+                              // Place on inner top corner
+                              mine ? "left-1" : "right-1"
+                            ].join(" ")}
+                          >
+                            <IconChevronDown className="h-4 w-4" />
+                          </button>
+                        ) : null}
+
+                        <div
                           onClick={(e) => {
                             e.stopPropagation();
                             if (!isPersisted) return;
@@ -787,25 +823,95 @@ export function ChatClient({
                             });
                           }}
                           className={[
-                            "absolute -bottom-2 z-10 inline-flex items-center gap-1 rounded-full border border-zinc-800 bg-zinc-950/90 px-2 py-0.5 text-[11px] text-zinc-100 shadow-sm",
-                            // Place on inner bottom corner (matches WhatsApp screenshot)
-                            mine ? "left-2" : "right-2"
+                            "rounded-chat-lg px-3.5 py-2.5 text-sm leading-snug",
+                            isPersisted && isSelected ? "ring-2 ring-chat-ring/25" : "",
+                            mine
+                              ? "bg-chat-primary text-chat-primary-foreground"
+                              : isAi(m.sender)
+                                ? "border border-chat-border bg-chat-surface2 text-chat-text"
+                                : "border border-chat-border bg-chat-surface text-chat-text"
                           ].join(" ")}
-                          aria-label="Message reactions"
                         >
-                          {reactions.slice(0, 3).map((r) => (
-                            <span key={`${m.id}:chip:${r.emoji}`} className={myReaction === r.emoji ? "text-zinc-100" : "text-zinc-200"}>
-                              {r.emoji}
+                          <div className="whitespace-pre-wrap break-words">{m.content}</div>
+
+                          <div
+                            className={[
+                              "mt-1.5 flex items-center justify-end gap-1.5 text-[11px]",
+                              mine ? "text-chat-primary-foreground/80" : "text-chat-muted"
+                            ].join(" ")}
+                          >
+                            {mine ? (
+                              <span className="inline-flex items-center gap-1.5">
+                                <span
+                                  className="inline-flex items-center gap-0.5"
+                                  aria-label={isRead ? "Read" : "Sent"}
+                                >
+                                  <span>✓</span>
+                                  {isRead ? <span>✓</span> : null}
+                                </span>
+                                <span className="opacity-90">
+                                  {isRead && otherLastReadAt ? formatReadTime(otherLastReadAt) : timeLabel}
+                                </span>
+                              </span>
+                            ) : (
+                              <span>{timeLabel}</span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Reactions chip (WhatsApp-like placement: hugs the bubble) */}
+                        {reactions.length ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (!isPersisted) return;
+                              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                              const anchor = {
+                                top: r.top,
+                                left: r.left,
+                                right: r.right,
+                                bottom: r.bottom,
+                                width: r.width,
+                                height: r.height
+                              };
+                              setSelectedMessageId(m.id);
+                              setMessageMenu({
+                                messageId: m.id,
+                                mine,
+                                content: m.content,
+                                anchor,
+                                placement: "above",
+                                pos: {
+                                  top: clamp(anchor.top - 240, 10, window.innerHeight - 10),
+                                  left: clamp(anchor.left + anchor.width / 2 - 140, 10, window.innerWidth - 10)
+                                }
+                              });
+                            }}
+                            className={[
+                              "absolute -bottom-3 z-10 inline-flex items-center gap-1 rounded-full border border-chat-border bg-chat-surface px-2 text-[11px] text-chat-text shadow-sm",
+                              // Place on inner bottom corner (matches WhatsApp screenshot)
+                              mine ? "left-2" : "right-2"
+                            ].join(" ")}
+                            aria-label="Message reactions"
+                          >
+                            {reactions.slice(0, 3).map((r) => (
+                              <span
+                                key={`${m.id}:chip:${r.emoji}`}
+                                className={myReaction === r.emoji ? "text-chat-text" : "text-chat-text/80"}
+                              >
+                                {r.emoji}
+                              </span>
+                            ))}
+                            <span className="text-chat-muted">
+                              {reactions.reduce((sum, r) => sum + (r.count || 0), 0)}
                             </span>
-                          ))}
-                          <span className="text-zinc-400">
-                            {reactions.reduce((sum, r) => sum + (r.count || 0), 0)}
-                          </span>
-                        </button>
-                      ) : null}
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
                   </div>
-                </div>
+                </Fragment>
               );
             })}
             <div ref={bottomRef} />
@@ -813,15 +919,15 @@ export function ChatClient({
         )}
       </div>
 
-      <div className="border-t border-zinc-800 px-6 py-4">
+      <div className="border-t border-chat-border bg-chat-surface px-6 py-5">
         {error ? (
-          <div className="mb-3 rounded-lg border border-red-900/60 bg-red-950/30 px-3 py-2 text-sm text-red-200">
+          <div className="mb-3 rounded-chat-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">{error}</div>
               <button
                 type="button"
                 onClick={() => setReconnectKey((k) => k + 1)}
-                className="shrink-0 rounded-md border border-red-900/60 bg-red-950/40 px-2 py-1 text-xs text-red-100 hover:bg-red-950/60"
+                className="shrink-0 rounded-chat-lg border border-red-200 bg-white px-2 py-1 text-xs font-medium text-red-800 hover:bg-red-50"
               >
                 Retry
               </button>
@@ -830,7 +936,7 @@ export function ChatClient({
         ) : null}
 
         {typingLabel ? (
-          <div className="mb-2 text-xs text-zinc-500">{typingLabel}</div>
+          <div className="mb-2 text-xs text-chat-muted">{typingLabel}</div>
         ) : (
           <div className="mb-2 h-[16px]" />
         )}
@@ -843,13 +949,13 @@ export function ChatClient({
               disabled={!canType}
               aria-label="Open emoji picker"
               aria-expanded={emojiOpen}
-              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950/60 text-lg text-zinc-200 hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-70"
+              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-chat-lg border border-chat-border bg-chat-surface text-lg text-chat-text/80 hover:bg-chat-bg disabled:cursor-not-allowed disabled:opacity-60"
             >
-              🙂
+              <IconSmile className="h-5 w-5" />
             </button>
 
             {emojiOpen ? (
-              <div className="absolute bottom-12 left-0 z-10 w-56 rounded-2xl border border-zinc-800 bg-zinc-950 p-2 shadow-lg">
+              <div className="absolute bottom-12 left-0 z-10 w-56 rounded-chat-xl border border-chat-border bg-chat-surface p-2 shadow-chat-card">
                 <div className="grid grid-cols-6 gap-1">
                   {quickEmojis.map((emoji) => (
                     <button
@@ -860,14 +966,14 @@ export function ChatClient({
                         if (!canType) return;
                         insertEmojiAtCursor(emoji);
                       }}
-                      className="inline-flex h-9 w-9 items-center justify-center rounded-xl hover:bg-zinc-900"
+                      className="inline-flex h-9 w-9 items-center justify-center rounded-chat-lg hover:bg-chat-bg"
                       aria-label={`Insert ${emoji}`}
                     >
                       <span className="text-lg leading-none">{emoji}</span>
                     </button>
                   ))}
                 </div>
-                <div className="mt-2 text-[11px] text-zinc-500">Click to insert into the message.</div>
+                <div className="mt-2 text-[11px] text-chat-muted">Click to insert into the message.</div>
               </div>
             ) : null}
           </div>
@@ -893,36 +999,27 @@ export function ChatClient({
             placeholder="Type a message…"
             rows={1}
             disabled={!canType}
-            className="h-11 flex-1 resize-none overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-zinc-600"
+            className="h-11 flex-1 resize-none overflow-hidden rounded-chat-lg border border-chat-border bg-chat-surface px-4 py-3 text-sm text-chat-text outline-none placeholder:text-chat-muted/70 focus:border-chat-primary focus:ring-2 focus:ring-chat-ring/20"
           />
           <button
             type="button"
             onClick={send}
             disabled={!canType || !content.trim()}
             aria-label="Send message"
-            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-zinc-900 hover:bg-white disabled:cursor-not-allowed disabled:opacity-70"
+            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-chat-lg bg-chat-primary text-chat-primary-foreground hover:brightness-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
           >
             {sending ? (
-              <span className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-400 border-t-transparent" aria-hidden="true" />
-            ) : (
-              <svg
-                viewBox="0 0 24 24"
-                className="h-5 w-5"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
+              <span
+                className="h-5 w-5 animate-spin rounded-full border-2 border-chat-primary-foreground/70 border-t-transparent"
                 aria-hidden="true"
-              >
-                <path d="M22 2 11 13" />
-                <path d="M22 2 15 22 11 13 2 9 22 2" />
-              </svg>
+              />
+            ) : (
+              <IconSend className="h-5 w-5" />
             )}
           </button>
         </div>
-        <div className="mt-2 text-xs text-zinc-500">
-          {connected ? (joined ? "Enter to send • Shift+Enter for newline" : "Joining session…") : "Disconnected — messages are disabled."}
+        <div className="mt-2 text-xs text-chat-muted">
+          {connected ? (joined ? "Enter to send • Shift+Enter for newline" : "Joining session…") : "Offline — messages are disabled."}
         </div>
       </div>
 
@@ -938,7 +1035,7 @@ export function ChatClient({
           <div
             ref={menuRef}
             className={[
-              "w-[260px] rounded-2xl border border-zinc-800 bg-zinc-950/95 shadow-xl",
+              "w-[260px] rounded-chat-xl border border-chat-border bg-chat-surface shadow-chat-card",
               "transform transition-all duration-150 ease-out",
               menuOpen ? "opacity-100 scale-100 translate-y-0" : "opacity-0 scale-95 -translate-y-1"
             ].join(" ")}
@@ -956,7 +1053,7 @@ export function ChatClient({
                     closeMessageMenu();
                     focusComposer();
                   }}
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-xl text-base hover:bg-zinc-900"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-chat-lg text-base hover:bg-chat-bg"
                   aria-label={`React with ${emoji}`}
                 >
                   {emoji}
@@ -964,7 +1061,7 @@ export function ChatClient({
               ))}
             </div>
 
-            <div className="h-px bg-zinc-800" />
+            <div className="h-px bg-chat-border" />
 
             <div className="p-1.5">
               <button
@@ -975,10 +1072,10 @@ export function ChatClient({
                   closeMessageMenu();
                   focusComposer();
                 }}
-                className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-900"
+                className="flex w-full items-center gap-3 rounded-chat-lg px-3 py-2.5 text-sm text-chat-text hover:bg-chat-bg"
               >
-                <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950/40 text-zinc-300">
-                  ⧉
+                <span className="inline-flex h-7 w-7 items-center justify-center rounded-chat-lg border border-chat-border bg-chat-surface text-chat-text/70">
+                  <IconCopy className="h-4 w-4" />
                 </span>
                 <span>Copy</span>
               </button>
@@ -993,25 +1090,10 @@ export function ChatClient({
                     closeMessageMenu();
                     focusComposer();
                   }}
-                  className="mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm text-red-200 hover:bg-zinc-900"
+                  className="mt-1 flex w-full items-center gap-3 rounded-chat-lg px-3 py-2.5 text-sm text-red-700 hover:bg-red-50"
                 >
-                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950/40 text-red-200">
-                    <svg
-                      viewBox="0 0 24 24"
-                      className="h-4 w-4"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      aria-hidden="true"
-                    >
-                      <path d="M3 6h18" />
-                      <path d="M8 6V4h8v2" />
-                      <path d="M19 6l-1 14H6L5 6" />
-                      <path d="M10 11v6" />
-                      <path d="M14 11v6" />
-                    </svg>
+                  <span className="inline-flex h-7 w-7 items-center justify-center rounded-chat-lg border border-red-200 bg-white text-red-700">
+                    <IconTrash className="h-4 w-4" />
                   </span>
                   <span>Delete</span>
                 </button>

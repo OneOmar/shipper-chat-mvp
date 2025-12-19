@@ -85,6 +85,15 @@ export type ReceiveMessageEvent = {
   createdAt: string;
   sender: { id: string; name: string | null; email: string; image: string | null };
   reactions?: Array<{ emoji: string; count: number }>;
+  /**
+   * Optional: the "conversation key" for the recipient.
+   * - direct chats: the other participant's userId
+   * - ai chats: "ai"
+   *
+   * This allows clients to render unread indicators even if they haven't loaded
+   * a full sessionId->userId mapping yet.
+   */
+  peerUserId?: string;
 };
 
 export type AiMessageStartEvent = { tempId: string; sessionId: string; sender: ReceiveMessageEvent["sender"] };
@@ -93,7 +102,7 @@ export type AiMessageDoneEvent = { tempId: string; sessionId: string; message: R
 
 export type TypingEvent = { sessionId: string; userId: string };
 export type MessagesReadEvent = { sessionId: string; messageIds: string[] };
-export type MessagesReadUpdateEvent = { sessionId: string; readerId: string; messageIds: string[] };
+export type MessagesReadUpdateEvent = { sessionId: string; readerId: string; messageIds: string[]; readAt: string };
 export type MessageDeletedEvent = { sessionId: string; messageId: string; deletedBy: string };
 export type MessageReactionsEvent = { sessionId: string; messageId: string; reactions: Array<{ emoji: string; count: number }> };
 
@@ -235,6 +244,10 @@ export function attachSocketServer(server: HttpServer) {
       return;
     }
 
+    // Always join a per-user room so we can deliver message events reliably
+    // without requiring the client to join every session room.
+    socket.join(`user:${user.userId}`);
+
     socket.on("join_session", async (sessionId: string, ack?: (ok: boolean) => void) => {
       try {
         if (!sessionId || typeof sessionId !== "string") {
@@ -303,7 +316,24 @@ export function attachSocketServer(server: HttpServer) {
             reactions: []
           };
 
-          io.to(`session:${sessionId}`).emit("receive_message", event);
+          // Emit to all participants via per-user rooms (more reliable than session rooms in practice).
+          // Include `peerUserId` so clients can attach unread counts without requiring a session map.
+          const sessionWithParticipants = await prisma.chatSession.findUnique({
+            where: { id: sessionId },
+            select: { type: true, participants: { select: { userId: true } } }
+          });
+          const participantIds = (sessionWithParticipants?.participants ?? [])
+            .map((p) => p.userId)
+            .filter((id): id is string => !!id);
+          for (const recipientId of participantIds) {
+            let peerUserId: string | undefined;
+            if (sessionWithParticipants?.type === "direct" && participantIds.length === 2) {
+              peerUserId = participantIds.find((id) => id !== recipientId);
+            } else if (sessionWithParticipants?.type === "ai") {
+              peerUserId = "ai";
+            }
+            io.to(`user:${recipientId}`).emit("receive_message", { ...event, peerUserId } satisfies ReceiveMessageEvent);
+          }
           ack?.(event);
 
           // If this is an AI session, trigger assistant response (stream if possible).
@@ -372,7 +402,26 @@ export function attachSocketServer(server: HttpServer) {
               message: finalEvent
             } satisfies AiMessageDoneEvent);
 
-            io.to(`session:${sessionId}`).emit("receive_message", finalEvent);
+            // Also deliver the final assistant message via per-user rooms (with peer key).
+            const sessionWithParticipants = await prisma.chatSession.findUnique({
+              where: { id: sessionId },
+              select: { type: true, participants: { select: { userId: true } } }
+            });
+            const participantIds = (sessionWithParticipants?.participants ?? [])
+              .map((p) => p.userId)
+              .filter((id): id is string => !!id);
+            for (const recipientId of participantIds) {
+              let peerUserId: string | undefined;
+              if (sessionWithParticipants?.type === "direct" && participantIds.length === 2) {
+                peerUserId = participantIds.find((id) => id !== recipientId);
+              } else if (sessionWithParticipants?.type === "ai") {
+                peerUserId = "ai";
+              }
+              io.to(`user:${recipientId}`).emit(
+                "receive_message",
+                { ...finalEvent, peerUserId } satisfies ReceiveMessageEvent
+              );
+            }
           }
         } catch {
           ack?.({ error: "Failed to send message" });
@@ -584,9 +633,27 @@ export function attachSocketServer(server: HttpServer) {
             return;
           }
 
+          // Persist lastReadAt for offline unread counts.
+          const latest = await prisma.message.findFirst({
+            where: { id: { in: validIds }, sessionId },
+            orderBy: { createdAt: "desc" },
+            select: { createdAt: true }
+          });
+          if (latest?.createdAt) {
+            await prisma.participant.update({
+              where: { userId_sessionId: { userId: user.userId, sessionId } },
+              data: { lastReadAt: latest.createdAt }
+            });
+          }
+
           io.to(`session:${sessionId}`).emit(
             "messages:read:update",
-            { sessionId, readerId: user.userId, messageIds: validIds } satisfies MessagesReadUpdateEvent
+            {
+              sessionId,
+              readerId: user.userId,
+              messageIds: validIds,
+              readAt: (latest?.createdAt ?? new Date()).toISOString()
+            } satisfies MessagesReadUpdateEvent
           );
           ack?.(true);
         } catch {
@@ -896,6 +963,44 @@ app.get("/api/chat/sessions", requireAuth, asyncHandler(async (req: Request, res
   return res.json({ sessions: out });
 }));
 
+app.get("/api/chat/unread-counts", requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const me = (req as AuthedRequest).auth;
+
+  const participants = await prisma.participant.findMany({
+    where: { userId: me.sub },
+    include: { session: { select: { id: true, type: true, participants: { select: { userId: true } } } } }
+  });
+
+  const out: Array<{ userId: string; count: number }> = [];
+
+  for (const p of participants) {
+    const session = p.session;
+    if (!session?.id) continue;
+    const lastReadAt = p.lastReadAt ?? new Date(0);
+
+    if (session.type === "ai") {
+      const count = await prisma.message.count({
+        where: { sessionId: session.id, role: "assistant", createdAt: { gt: lastReadAt } }
+      });
+      if (count > 0) out.push({ userId: "ai", count: Math.min(4, count) });
+      continue;
+    }
+
+    // Direct: count messages sent by the other participant after lastReadAt.
+    const ids = (session.participants ?? []).map((x) => x.userId).filter(Boolean);
+    if (ids.length !== 2) continue;
+    const otherUserId = ids.find((id) => id !== me.sub) ?? "";
+    if (!otherUserId) continue;
+
+    const count = await prisma.message.count({
+      where: { sessionId: session.id, senderId: otherUserId, createdAt: { gt: lastReadAt } }
+    });
+    if (count > 0) out.push({ userId: otherUserId, count: Math.min(4, count) });
+  }
+
+  return res.json({ unread: out });
+}));
+
 // ---- Profile (public fields) ----
 
 app.get("/api/me", requireAuth, asyncHandler(async (req: Request, res: Response) => {
@@ -1001,11 +1106,25 @@ app.get("/api/chat/session/:sessionId/bootstrap", requireAuth, asyncHandler(asyn
 
   const session = await prisma.chatSession.findUnique({
     where: { id: sessionId },
-    include: { participants: { include: { user: { select: { id: true, name: true, email: true, image: true } } } } }
+    include: {
+      participants: {
+        select: {
+          userId: true,
+          lastReadAt: true,
+          user: { select: { id: true, name: true, email: true, image: true } }
+        }
+      }
+    }
   });
   if (!session) return res.status(404).json({ error: "Not found" });
   const isMember = session.participants.some((p) => p.userId === me.sub);
   if (!isMember) return res.status(404).json({ error: "Not found" });
+
+  // Persist "read up to now" when opening the chat so offline unread can be computed later.
+  await prisma.participant.update({
+    where: { userId_sessionId: { userId: me.sub, sessionId } },
+    data: { lastReadAt: new Date() }
+  });
 
   const messages = await prisma.message.findMany({
     where: { sessionId },
@@ -1038,6 +1157,9 @@ app.get("/api/chat/session/:sessionId/bootstrap", requireAuth, asyncHandler(asyn
     meUserId: me.sub,
     sessionId,
     participants: session.participants.map((p) => p.user),
+    lastReadAtByUserId: Object.fromEntries(
+      session.participants.map((p) => [p.userId, (p.lastReadAt ?? new Date(0)).toISOString()])
+    ),
     initialMessages: messages.map((m) => ({
       id: m.id,
       content: m.content,

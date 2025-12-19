@@ -1,11 +1,15 @@
 import Link from "next/link";
+import Image from "next/image";
 
 export function Header({ isAuthed }: { isAuthed: boolean }) {
   return (
-    <header className="border-b border-zinc-800">
-      <div className="mx-auto flex h-14 w-full max-w-5xl items-center justify-between px-6">
-        <Link href="/" className="text-sm font-semibold tracking-tight text-zinc-100">
-          Shipper Chat
+    <header className="border-b border-chat-border bg-chat-surface">
+      <div className="mx-auto flex h-[72px] w-full max-w-6xl items-center justify-between px-6">
+        <Link href="/" className="flex items-center gap-3 text-sm font-semibold tracking-tight text-chat-text">
+          <span className="relative h-9 w-9 overflow-hidden rounded-full">
+            <Image src="/logo.png" alt="Shipper Chat" width={36} height={36} className="h-9 w-9" priority />
+          </span>
+          <span>Shipper Chat</span>
         </Link>
 
         <nav className="flex items-center gap-2">
@@ -13,13 +17,13 @@ export function Header({ isAuthed }: { isAuthed: boolean }) {
             <>
               <Link
                 href="/profile"
-                className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-900"
+                className="rounded-chat-lg border border-chat-border bg-chat-surface px-3 py-2 text-xs font-medium text-chat-text/90 hover:bg-chat-bg"
               >
                 Profile
               </Link>
               <Link
                 href="/chat"
-                className="rounded-lg bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-900 hover:bg-white"
+                className="rounded-chat-lg bg-chat-primary px-3 py-2 text-xs font-medium text-chat-primary-foreground hover:brightness-[0.98]"
               >
                 Go to Chat
               </Link>
@@ -28,13 +32,13 @@ export function Header({ isAuthed }: { isAuthed: boolean }) {
             <>
               <Link
                 href="/login"
-                className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-900"
+                className="rounded-chat-lg border border-chat-border bg-chat-surface px-3 py-2 text-xs font-medium text-chat-text/90 hover:bg-chat-bg"
               >
                 Login
               </Link>
               <Link
                 href="/register"
-                className="rounded-lg bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-900 hover:bg-white"
+                className="rounded-chat-lg bg-chat-primary px-3 py-2 text-xs font-medium text-chat-primary-foreground hover:brightness-[0.98]"
               >
                 Register
               </Link>

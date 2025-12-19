@@ -12,7 +12,7 @@ export default async function Page() {
   const isAuthed = !!(token && verifyAuthToken(token));
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+    <div className="chat-theme min-h-screen bg-chat-bg text-chat-text">
       <Header isAuthed={isAuthed} />
 
       <main>
