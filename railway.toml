@@ -5,5 +5,5 @@ rootDirectory = "backend"
 [deploy]
 startCommand = "npm start"
 # Apply Prisma migrations before the new deploy goes live.
-preDeployCommand = "cd backend && node scripts/railway-migrate.js"
+preDeployCommand = "node scripts/railway-migrate.js"
 
