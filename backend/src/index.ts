@@ -1001,6 +1001,78 @@ app.get("/api/chat/unread-counts", requireAuth, asyncHandler(async (req: Request
   return res.json({ unread: out });
 }));
 
+app.get("/api/chat/search", requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const me = (req as AuthedRequest).auth;
+
+  function firstQueryString(v: unknown) {
+    if (typeof v === "string") return v;
+    if (Array.isArray(v)) return typeof v[0] === "string" ? v[0] : "";
+    return "";
+  }
+
+  const q = firstQueryString((req.query as Record<string, unknown> | undefined)?.q).trim();
+  if (!q || q.length < 2) return res.json({ results: [] });
+
+  const limitRaw = firstQueryString((req.query as Record<string, unknown> | undefined)?.limit);
+  const limitNum = Number(limitRaw);
+  const limit = Number.isFinite(limitNum) ? Math.max(1, Math.min(50, Math.floor(limitNum))) : 20;
+
+  const messages = await prisma.message.findMany({
+    where: {
+      content: { contains: q, mode: "insensitive" },
+      session: { participants: { some: { userId: me.sub } } }
+    },
+    orderBy: { createdAt: "desc" },
+    take: limit,
+    select: {
+      id: true,
+      content: true,
+      createdAt: true,
+      sessionId: true,
+      role: true,
+      senderId: true,
+      session: {
+        select: {
+          id: true,
+          type: true,
+          participants: {
+            select: {
+              userId: true,
+              user: { select: { id: true, name: true, email: true, image: true } }
+            }
+          }
+        }
+      }
+    }
+  });
+
+  const results = messages.map((m) => {
+    const participants = m.session?.participants ?? [];
+    const ids = participants.map((p) => p.userId).filter(Boolean);
+    let peerUserId: string | "ai" | "" = "";
+    let peer: { id: string; name: string | null; email: string; image: string | null } | null = null;
+
+    if (m.session?.type === "ai") {
+      peerUserId = "ai";
+      peer = { id: "ai", name: "AI", email: "ai@local", image: null };
+    } else {
+      peerUserId = ids.find((id) => id !== me.sub) ?? "";
+      peer = participants.find((p) => p.userId === peerUserId)?.user ?? null;
+    }
+
+    return {
+      messageId: m.id,
+      sessionId: m.sessionId,
+      createdAt: m.createdAt.toISOString(),
+      content: m.content,
+      peerUserId,
+      peer
+    };
+  });
+
+  return res.json({ results });
+}));
+
 // ---- Profile (public fields) ----
 
 app.get("/api/me", requireAuth, asyncHandler(async (req: Request, res: Response) => {

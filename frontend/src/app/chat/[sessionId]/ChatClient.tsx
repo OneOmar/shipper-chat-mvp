@@ -93,13 +93,17 @@ export function ChatClient({
   sessionId,
   participants,
   initialMessages,
-  lastReadAtByUserId
+  lastReadAtByUserId,
+  initialFocusMessageId = "",
+  initialSearchQuery = ""
 }: {
   meUserId: string;
   sessionId: string;
   participants: User[];
   initialMessages: Message[];
   lastReadAtByUserId: Record<string, string>;
+  initialFocusMessageId?: string;
+  initialSearchQuery?: string;
 }) {
   const { openSidebar, onlineUserIds } = useChatShell();
   const [socket, setSocket] = useState<Socket | null>(null);
@@ -138,6 +142,23 @@ export function ChatClient({
 
   // Read receipts (persisted via participant.lastReadAt on backend)
   const [otherLastReadAt, setOtherLastReadAt] = useState<Date | null>(null);
+
+  // Search focus (from sidebar results)
+  useEffect(() => {
+    const targetId = (initialFocusMessageId || "").trim();
+    if (!targetId) return;
+    // Wait a tick so the message DOM is committed.
+    const t = window.setTimeout(() => {
+      const el = document.getElementById(`msg-${targetId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        setSelectedMessageId(targetId);
+        // Auto-clear highlight after a moment.
+        window.setTimeout(() => setSelectedMessageId(null), 2200);
+      }
+    }, 50);
+    return () => window.clearTimeout(t);
+  }, [initialFocusMessageId, sessionId, initialSearchQuery]);
   const sentReadIdsRef = useRef<Set<string>>(new Set());
 
   const title = useMemo(() => {
@@ -750,7 +771,7 @@ export function ChatClient({
                     </div>
                   ) : null}
 
-                  <div className={mine ? "flex justify-end" : "flex justify-start"}>
+                  <div id={`msg-${m.id}`} className={mine ? "flex justify-end scroll-mt-24" : "flex justify-start scroll-mt-24"}>
                     <div
                       className={["flex max-w-[90%] items-end gap-2", mine ? "justify-end" : "justify-start"].join(" ")}
                     >
